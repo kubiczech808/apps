@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-09-30T10:16:43+00:00",
+  "generated_at": "2026-09-30T10:21:31+00:00",
   "plugins": [
     {
       "file": "ecomail/ecomail.php",
@@ -6429,7 +6429,7 @@
       "html_bytes": 0,
       "has_html": false,
       "html_has_raw_qp_artifacts": false,
-      "selected_variant": "jamu-en",
+      "selected_variant": "",
       "mime_prepared": false,
       "mime_encoding": "base64",
       "mime_has_base64_header": false,
@@ -6441,7 +6441,7 @@
       "html_bytes": 0,
       "has_html": false,
       "html_has_raw_qp_artifacts": false,
-      "selected_variant": "jamu-de",
+      "selected_variant": "",
       "mime_prepared": false,
       "mime_encoding": "base64",
       "mime_has_base64_header": false,
@@ -6453,7 +6453,7 @@
       "html_bytes": 0,
       "has_html": false,
       "html_has_raw_qp_artifacts": false,
-      "selected_variant": "jamu-pl",
+      "selected_variant": "",
       "mime_prepared": false,
       "mime_encoding": "base64",
       "mime_has_base64_header": false,
@@ -6477,7 +6477,7 @@
       "html_bytes": 0,
       "has_html": false,
       "html_has_raw_qp_artifacts": false,
-      "selected_variant": "jamu-en",
+      "selected_variant": "",
       "mime_prepared": false,
       "mime_encoding": "base64",
       "mime_has_base64_header": false,
@@ -6489,7 +6489,7 @@
       "html_bytes": 0,
       "has_html": false,
       "html_has_raw_qp_artifacts": false,
-      "selected_variant": "jamu-de",
+      "selected_variant": "",
       "mime_prepared": false,
       "mime_encoding": "base64",
       "mime_has_base64_header": false,
@@ -6501,7 +6501,7 @@
       "html_bytes": 0,
       "has_html": false,
       "html_has_raw_qp_artifacts": false,
-      "selected_variant": "jamu-pl",
+      "selected_variant": "",
       "mime_prepared": false,
       "mime_encoding": "base64",
       "mime_has_base64_header": false,
@@ -6525,7 +6525,7 @@
       "html_bytes": 0,
       "has_html": false,
       "html_has_raw_qp_artifacts": false,
-      "selected_variant": "jamu-en",
+      "selected_variant": "",
       "mime_prepared": false,
       "mime_encoding": "base64",
       "mime_has_base64_header": false,
@@ -6537,7 +6537,7 @@
       "html_bytes": 0,
       "has_html": false,
       "html_has_raw_qp_artifacts": false,
-      "selected_variant": "jamu-de",
+      "selected_variant": "",
       "mime_prepared": false,
       "mime_encoding": "base64",
       "mime_has_base64_header": false,
@@ -6549,7 +6549,7 @@
       "html_bytes": 0,
       "has_html": false,
       "html_has_raw_qp_artifacts": false,
-      "selected_variant": "jamu-pl",
+      "selected_variant": "",
       "mime_prepared": false,
       "mime_encoding": "base64",
       "mime_has_base64_header": false,
@@ -6573,7 +6573,7 @@
       "html_bytes": 0,
       "has_html": false,
       "html_has_raw_qp_artifacts": false,
-      "selected_variant": "jamu-en",
+      "selected_variant": "",
       "mime_prepared": false,
       "mime_encoding": "base64",
       "mime_has_base64_header": false,
@@ -6585,7 +6585,7 @@
       "html_bytes": 0,
       "has_html": false,
       "html_has_raw_qp_artifacts": false,
-      "selected_variant": "jamu-de",
+      "selected_variant": "",
       "mime_prepared": false,
       "mime_encoding": "base64",
       "mime_has_base64_header": false,
@@ -6597,7 +6597,7 @@
       "html_bytes": 0,
       "has_html": false,
       "html_has_raw_qp_artifacts": false,
-      "selected_variant": "jamu-pl",
+      "selected_variant": "",
       "mime_prepared": false,
       "mime_encoding": "base64",
       "mime_has_base64_header": false,
@@ -6621,7 +6621,7 @@
       "html_bytes": 0,
       "has_html": false,
       "html_has_raw_qp_artifacts": false,
-      "selected_variant": "jamu-en",
+      "selected_variant": "",
       "mime_prepared": false,
       "mime_encoding": "base64",
       "mime_has_base64_header": false,
@@ -6633,7 +6633,7 @@
       "html_bytes": 0,
       "has_html": false,
       "html_has_raw_qp_artifacts": false,
-      "selected_variant": "jamu-de",
+      "selected_variant": "",
       "mime_prepared": false,
       "mime_encoding": "base64",
       "mime_has_base64_header": false,
@@ -6645,7 +6645,7 @@
       "html_bytes": 0,
       "has_html": false,
       "html_has_raw_qp_artifacts": false,
-      "selected_variant": "jamu-pl",
+      "selected_variant": "",
       "mime_prepared": false,
       "mime_encoding": "base64",
       "mime_has_base64_header": false,
@@ -6669,7 +6669,7 @@
       "html_bytes": 0,
       "has_html": false,
       "html_has_raw_qp_artifacts": false,
-      "selected_variant": "jamu-en",
+      "selected_variant": "",
       "mime_prepared": false,
       "mime_encoding": "base64",
       "mime_has_base64_header": false,
@@ -6681,7 +6681,7 @@
       "html_bytes": 0,
       "has_html": false,
       "html_has_raw_qp_artifacts": false,
-      "selected_variant": "jamu-de",
+      "selected_variant": "",
       "mime_prepared": false,
       "mime_encoding": "base64",
       "mime_has_base64_header": false,
@@ -6693,7 +6693,7 @@
       "html_bytes": 0,
       "has_html": false,
       "html_has_raw_qp_artifacts": false,
-      "selected_variant": "jamu-pl",
+      "selected_variant": "",
       "mime_prepared": false,
       "mime_encoding": "base64",
       "mime_has_base64_header": false,
@@ -6717,7 +6717,7 @@
       "html_bytes": 0,
       "has_html": false,
       "html_has_raw_qp_artifacts": false,
-      "selected_variant": "jamu-en",
+      "selected_variant": "",
       "mime_prepared": false,
       "mime_encoding": "base64",
       "mime_has_base64_header": false,
@@ -6729,7 +6729,7 @@
       "html_bytes": 0,
       "has_html": false,
       "html_has_raw_qp_artifacts": false,
-      "selected_variant": "jamu-de",
+      "selected_variant": "",
       "mime_prepared": false,
       "mime_encoding": "base64",
       "mime_has_base64_header": false,
@@ -6741,7 +6741,7 @@
       "html_bytes": 0,
       "has_html": false,
       "html_has_raw_qp_artifacts": false,
-      "selected_variant": "jamu-pl",
+      "selected_variant": "",
       "mime_prepared": false,
       "mime_encoding": "base64",
       "mime_has_base64_header": false,
@@ -6765,7 +6765,7 @@
       "html_bytes": 0,
       "has_html": false,
       "html_has_raw_qp_artifacts": false,
-      "selected_variant": "jamu-en",
+      "selected_variant": "",
       "mime_prepared": false,
       "mime_encoding": "base64",
       "mime_has_base64_header": false,
@@ -6777,7 +6777,7 @@
       "html_bytes": 0,
       "has_html": false,
       "html_has_raw_qp_artifacts": false,
-      "selected_variant": "jamu-de",
+      "selected_variant": "",
       "mime_prepared": false,
       "mime_encoding": "base64",
       "mime_has_base64_header": false,
@@ -6789,7 +6789,7 @@
       "html_bytes": 0,
       "has_html": false,
       "html_has_raw_qp_artifacts": false,
-      "selected_variant": "jamu-pl",
+      "selected_variant": "",
       "mime_prepared": false,
       "mime_encoding": "base64",
       "mime_has_base64_header": false,
@@ -6804,17 +6804,17 @@
     },
     {
       "template_name": "customer_failed_order",
-      "selected_variant": "jamu-en",
+      "selected_variant": "",
       "email_id": "customer_failed_order"
     },
     {
       "template_name": "customer_failed_order",
-      "selected_variant": "jamu-de",
+      "selected_variant": "",
       "email_id": "customer_failed_order"
     },
     {
       "template_name": "customer_failed_order",
-      "selected_variant": "jamu-pl",
+      "selected_variant": "",
       "email_id": "customer_failed_order"
     },
     {
@@ -6829,32 +6829,32 @@
     },
     {
       "template_name": "customer_on_hold_order",
-      "selected_variant": "jamu-en",
+      "selected_variant": "",
       "email_id": ""
     },
     {
       "template_name": "customer_on_hold_order",
-      "selected_variant": "jamu-en",
+      "selected_variant": "",
       "email_id": "customer_on_hold_order"
     },
     {
       "template_name": "customer_on_hold_order",
-      "selected_variant": "jamu-de",
+      "selected_variant": "",
       "email_id": ""
     },
     {
       "template_name": "customer_on_hold_order",
-      "selected_variant": "jamu-de",
+      "selected_variant": "",
       "email_id": "customer_on_hold_order"
     },
     {
       "template_name": "customer_on_hold_order",
-      "selected_variant": "jamu-pl",
+      "selected_variant": "",
       "email_id": ""
     },
     {
       "template_name": "customer_on_hold_order",
-      "selected_variant": "jamu-pl",
+      "selected_variant": "",
       "email_id": "customer_on_hold_order"
     },
     {
@@ -6864,17 +6864,17 @@
     },
     {
       "template_name": "customer_processing_order",
-      "selected_variant": "jamu-en",
+      "selected_variant": "",
       "email_id": "customer_processing_order"
     },
     {
       "template_name": "customer_processing_order",
-      "selected_variant": "jamu-de",
+      "selected_variant": "",
       "email_id": "customer_processing_order"
     },
     {
       "template_name": "customer_processing_order",
-      "selected_variant": "jamu-pl",
+      "selected_variant": "",
       "email_id": "customer_processing_order"
     },
     {
@@ -6884,17 +6884,17 @@
     },
     {
       "template_name": "customer_refunded_order",
-      "selected_variant": "jamu-en",
+      "selected_variant": "",
       "email_id": "customer_refunded_order"
     },
     {
       "template_name": "customer_refunded_order",
-      "selected_variant": "jamu-de",
+      "selected_variant": "",
       "email_id": "customer_refunded_order"
     },
     {
       "template_name": "customer_refunded_order",
-      "selected_variant": "jamu-pl",
+      "selected_variant": "",
       "email_id": "customer_refunded_order"
     },
     {
@@ -6904,17 +6904,17 @@
     },
     {
       "template_name": "customer_note",
-      "selected_variant": "jamu-en",
+      "selected_variant": "",
       "email_id": "customer_note"
     },
     {
       "template_name": "customer_note",
-      "selected_variant": "jamu-de",
+      "selected_variant": "",
       "email_id": "customer_note"
     },
     {
       "template_name": "customer_note",
-      "selected_variant": "jamu-pl",
+      "selected_variant": "",
       "email_id": "customer_note"
     },
     {
@@ -6924,17 +6924,17 @@
     },
     {
       "template_name": "customer_reset_password",
-      "selected_variant": "jamu-en",
+      "selected_variant": "",
       "email_id": "customer_reset_password"
     },
     {
       "template_name": "customer_reset_password",
-      "selected_variant": "jamu-de",
+      "selected_variant": "",
       "email_id": "customer_reset_password"
     },
     {
       "template_name": "customer_reset_password",
-      "selected_variant": "jamu-pl",
+      "selected_variant": "",
       "email_id": "customer_reset_password"
     },
     {
@@ -6944,17 +6944,17 @@
     },
     {
       "template_name": "customer_new_account",
-      "selected_variant": "jamu-en",
+      "selected_variant": "",
       "email_id": "customer_new_account"
     },
     {
       "template_name": "customer_new_account",
-      "selected_variant": "jamu-de",
+      "selected_variant": "",
       "email_id": "customer_new_account"
     },
     {
       "template_name": "customer_new_account",
-      "selected_variant": "jamu-pl",
+      "selected_variant": "",
       "email_id": "customer_new_account"
     },
     {
@@ -6964,17 +6964,17 @@
     },
     {
       "template_name": "customer_verify_email",
-      "selected_variant": "jamu-en",
+      "selected_variant": "",
       "email_id": "customer_verify_email"
     },
     {
       "template_name": "customer_verify_email",
-      "selected_variant": "jamu-de",
+      "selected_variant": "",
       "email_id": "customer_verify_email"
     },
     {
       "template_name": "customer_verify_email",
-      "selected_variant": "jamu-pl",
+      "selected_variant": "",
       "email_id": "customer_verify_email"
     }
   ],
