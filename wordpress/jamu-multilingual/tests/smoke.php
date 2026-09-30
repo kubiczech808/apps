@@ -239,8 +239,8 @@ foreach ($customer_email_cases as $language => $expected) {
     }
 
     $variant = apply_filters('yaymail_email_get_variant', '', $localized_order, [], null, 'customer_on_hold_order');
-    if ($variant !== 'jamu-' . $language) {
-        throw new RuntimeException('YayMail customer email variant was not selected for ' . $language . '.');
+    if ($variant !== '') {
+        throw new RuntimeException('An unsafe YayMail visual variant was selected for ' . $language . '.');
     }
 }
 $default_variant = apply_filters('yaymail_email_get_variant', '', $email_order, [], null, 'new_order');

@@ -145,20 +145,15 @@ final class Email
     }
 
     /**
-     * YayMail's documented variant hook selects an independent visual design
-     * for an order. The order meta, rather than the current admin/browser
-     * language, is the authority here.
+     * Keep YayMail's canonical visual design at runtime. YayMail 4.4.6 can
+     * load a stored variant but return an empty customer-email body, so
+     * selecting it would be worse than a Czech fallback. Localized subject,
+     * heading, additional content and the final rendered text are still
+     * applied from the order language below.
      */
     public function yaymail_email_variant(string $variant, mixed $order, mixed $args = null, mixed $email = null, mixed $template_name = null): string
     {
-        $order = $this->normalize_order($order);
-        $language = $order ? $this->order_language($order) : '';
-        $template_name = is_string($template_name) ? $template_name : '';
-        if ($language === '' || $language === Languages::DEFAULT || !str_starts_with($template_name, 'customer_')) {
-            return $variant;
-        }
-
-        return $this->yaymail_variant_slug($language);
+        return $variant;
     }
 
     /**
