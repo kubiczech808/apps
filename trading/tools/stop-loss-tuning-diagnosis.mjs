@@ -93,9 +93,8 @@ function normalizeTrade(row) {
     declineKind: row.declineKind || null,
     unsoldShares: num(row.unsoldShares),
     status: String(row.status || "").toUpperCase() || null,
-    // The paper bot's own account of what the stop did, and the only place any of these
-    // rows says so: ARMED on a LOST trade means the stop was watching and never fired,
-    // DECLINED_GAPPED means the gap band refused it, FILLED_AT_FLOOR means it worked.
+    // The paper bot's own account of what the stop did. FILLED_AT_FLOOR is a legacy
+    // simulated resting-order fill, not evidence of an executable live exit.
     stopLossStatus: row.stopLossStatus || null,
     stopLossPrice: num(row.stopLossPrice),
     closeReason: row.closeReason || null,
@@ -709,7 +708,8 @@ async function report(entry, live) {
   console.log("== 7. what the stop ACTUALLY did, in the rows' own words");
   console.log("   This is the decisive section. stopLossStatus is what the bot wrote down at the");
   console.log("   time: ARMED on a losing trade means the stop was watching and never fired,");
-  console.log("   DECLINED_GAPPED means the gap band refused it, FILLED_AT_FLOOR means it worked.\n");
+  console.log("   DECLINED_GAPPED means the gap band refused it. FILLED_AT_FLOOR is a legacy");
+  console.log("   simulated floor fill and is not counted below as a verified stop sale.\n");
   const byStop = new Map();
   for (const trade of trades) {
     const key = `${String(trade.stopLossStatus || "(none)").padEnd(20)} status ${String(trade.status || "-").padEnd(12)}`;
@@ -797,13 +797,13 @@ async function report(entry, live) {
       row.lostFullPnl += trade.realizedPnl || 0;
       if (String(trade.stopLossStatus || "").toUpperCase() === "ARMED") row.armedLost += 1;
     }
-    if (["FILLED_AT_FLOOR", "FILLED_AFTER_GAP", "GAP_BEYOND_TARGET"].includes(String(trade.stopLossStatus || "").toUpperCase())) {
+    if (["FILLED_AFTER_GAP", "GAP_BEYOND_TARGET"].includes(String(trade.stopLossStatus || "").toUpperCase())) {
       row.stopSold += 1;
       row.stopSoldPnl += trade.realizedPnl || 0;
     }
     shapes.set(shape, row);
   }
-  console.log("   shape            n   win%   total P/L   ROI     stop sold   full-stake   of those ARMED   full-stake P/L");
+  console.log("   shape            n   win%   total P/L   ROI  verified stop  full-stake   of those ARMED   full-stake P/L");
   for (const [shape, row] of [...shapes].sort((a, b) => a[1].pnl - b[1].pnl)) {
     console.log(`   ${clip(shape, 14)} ${String(row.n).padStart(3)}`
       + `  ${pct(row.n ? row.won / row.n : null)}`
