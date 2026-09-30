@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-09-30T09:48:31+00:00",
+  "generated_at": "2026-09-30T09:51:59+00:00",
   "plugins": [
     {
       "file": "ecomail/ecomail.php",
@@ -414,7 +414,6 @@
       "variant": "",
       "jamu_language_fields": [],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": false,
       "meta": [
         {
           "key": "_yaymail_email_order_item_title",
@@ -491,7 +490,6 @@
       "variant": "",
       "jamu_language_fields": [],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": true,
       "meta": [
         {
           "key": "_yaymail_email_order_item_title",
@@ -568,7 +566,6 @@
       "variant": "",
       "jamu_language_fields": [],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": true,
       "meta": [
         {
           "key": "_yaymail_email_order_item_title",
@@ -645,7 +642,6 @@
       "variant": "",
       "jamu_language_fields": [],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": true,
       "meta": [
         {
           "key": "_yaymail_email_order_item_title",
@@ -727,7 +723,6 @@
       "variant": "",
       "jamu_language_fields": [],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": true,
       "meta": [
         {
           "key": "_yaymail_email_order_item_title",
@@ -809,7 +804,6 @@
       "variant": "",
       "jamu_language_fields": [],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": true,
       "meta": [
         {
           "key": "_yaymail_email_order_item_title",
@@ -886,7 +880,6 @@
       "variant": "",
       "jamu_language_fields": [],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": true,
       "meta": [
         {
           "key": "_yaymail_email_order_item_title",
@@ -963,7 +956,6 @@
       "variant": "",
       "jamu_language_fields": [],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": true,
       "meta": [
         {
           "key": "_yaymail_email_order_item_title",
@@ -1040,7 +1032,6 @@
       "variant": "",
       "jamu_language_fields": [],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": false,
       "meta": [
         {
           "key": "_yaymail_email_order_item_title",
@@ -1102,7 +1093,6 @@
       "variant": "",
       "jamu_language_fields": [],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": false,
       "meta": [
         {
           "key": "_yaymail_email_order_item_title",
@@ -1164,7 +1154,6 @@
       "variant": "",
       "jamu_language_fields": [],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": false,
       "meta": [
         {
           "key": "_yaymail_email_order_item_title",
@@ -1226,7 +1215,6 @@
       "variant": "",
       "jamu_language_fields": [],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": false,
       "meta": [
         {
           "key": "_yaymail_email_order_item_title",
@@ -1288,7 +1276,6 @@
       "variant": "",
       "jamu_language_fields": [],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": false,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -1325,7 +1312,6 @@
       "variant": "",
       "jamu_language_fields": [],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": false,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -1372,7 +1358,6 @@
       "variant": "",
       "jamu_language_fields": [],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": false,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -1419,7 +1404,6 @@
       "variant": "",
       "jamu_language_fields": [],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": false,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -1470,7 +1454,6 @@
         "additional_content"
       ],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": true,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -1551,7 +1534,6 @@
         "additional_content"
       ],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": true,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -1632,7 +1614,6 @@
         "additional_content"
       ],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": true,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -1713,7 +1694,6 @@
         "additional_content"
       ],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": true,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -1794,7 +1774,6 @@
         "additional_content"
       ],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": true,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -1875,7 +1854,6 @@
         "additional_content"
       ],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": true,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -1956,7 +1934,6 @@
         "additional_content"
       ],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": true,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -2037,7 +2014,6 @@
         "additional_content"
       ],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": true,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -2118,7 +2094,6 @@
         "additional_content"
       ],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": true,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -2199,7 +2174,6 @@
         "additional_content"
       ],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": true,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -2280,7 +2254,6 @@
         "additional_content"
       ],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": true,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -2361,7 +2334,6 @@
         "additional_content"
       ],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": true,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -2442,7 +2414,6 @@
         "additional_content"
       ],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": true,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -2523,7 +2494,6 @@
         "additional_content"
       ],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": true,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -2604,7 +2574,6 @@
         "additional_content"
       ],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": true,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -2685,7 +2654,6 @@
         "additional_content"
       ],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": false,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -2766,7 +2734,6 @@
         "additional_content"
       ],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": false,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -2847,7 +2814,6 @@
         "additional_content"
       ],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": false,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -2928,7 +2894,6 @@
         "additional_content"
       ],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": false,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -3009,7 +2974,6 @@
         "additional_content"
       ],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": false,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -3090,7 +3054,6 @@
         "additional_content"
       ],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": false,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -3171,7 +3134,6 @@
         "additional_content"
       ],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": false,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -3252,7 +3214,6 @@
         "additional_content"
       ],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": false,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -3333,7 +3294,6 @@
         "additional_content"
       ],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": false,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -3414,7 +3374,6 @@
         "additional_content"
       ],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": false,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -3495,7 +3454,6 @@
         "additional_content"
       ],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": false,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -3576,7 +3534,6 @@
         "additional_content"
       ],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": false,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -3657,7 +3614,6 @@
         "additional_content"
       ],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": false,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -3738,7 +3694,6 @@
         "additional_content"
       ],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": false,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -3819,7 +3774,6 @@
         "additional_content"
       ],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": false,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -3900,7 +3854,6 @@
         "additional_content"
       ],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": false,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -3981,7 +3934,6 @@
         "additional_content"
       ],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": false,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -4062,7 +4014,6 @@
         "additional_content"
       ],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": false,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -4143,7 +4094,6 @@
         "additional_content"
       ],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": false,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -4224,7 +4174,6 @@
         "additional_content"
       ],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": false,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -4305,7 +4254,6 @@
         "additional_content"
       ],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": false,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -4386,7 +4334,6 @@
         "additional_content"
       ],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": false,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -4467,7 +4414,6 @@
         "additional_content"
       ],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": false,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -4543,7 +4489,6 @@
         "additional_content"
       ],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": false,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -4619,7 +4564,6 @@
         "additional_content"
       ],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": false,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -4695,7 +4639,6 @@
         "additional_content"
       ],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": false,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -4771,7 +4714,6 @@
         "additional_content"
       ],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": false,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -4847,7 +4789,6 @@
         "additional_content"
       ],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": false,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -4923,7 +4864,6 @@
         "additional_content"
       ],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": false,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -4999,7 +4939,6 @@
         "additional_content"
       ],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": false,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -5075,7 +5014,6 @@
         "additional_content"
       ],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": false,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -5151,7 +5089,6 @@
         "additional_content"
       ],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": false,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -5227,7 +5164,6 @@
         "additional_content"
       ],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": false,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -5303,7 +5239,6 @@
         "additional_content"
       ],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": false,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -5379,7 +5314,6 @@
         "additional_content"
       ],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": false,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -5455,7 +5389,6 @@
         "additional_content"
       ],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": false,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -5531,7 +5464,6 @@
         "additional_content"
       ],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": false,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -5607,7 +5539,6 @@
         "additional_content"
       ],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": false,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -5683,7 +5614,6 @@
         "additional_content"
       ],
       "content_bytes": 0,
-      "has_quoted_printable_artifacts": false,
       "meta": [
         {
           "key": "_yaymail_template",
@@ -5874,5 +5804,6 @@
   "wpcode_signals": [],
   "mail_encoding_probe": {
     "available": false
-  }
+  },
+  "template_encoding_summary": []
 }
