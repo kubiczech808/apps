@@ -159,6 +159,9 @@ add_action('wp_loaded', static function (): void {
                 'id' => (int) $template->ID,
                 'title' => (string) $template->post_title,
                 'status' => (string) $template->post_status,
+                'template_name' => (string) get_post_meta($template->ID, '_yaymail_template', true),
+                'variant' => (string) get_post_meta($template->ID, '_yaymail_template_variant', true),
+                'jamu_language_fields' => array_values(array_filter(['subject', 'heading', 'additional_content'], static fn (string $field): bool => metadata_exists('post', $template->ID, '_jamu_ml_' . $field))),
                 'content_bytes' => strlen((string) $template->post_content),
                 'meta' => $meta_summary,
             ];
