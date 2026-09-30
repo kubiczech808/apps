@@ -2636,7 +2636,7 @@ function trading_storage_observations_upsert(array $items): int
     }
     trading_storage_bootstrap($pdo);
     $statement = $pdo->prepare(
-        'INSERT INTO trading_observations (
+        "INSERT INTO trading_observations (
            observation_key, lifecycle, source_id, token_id, event_slug, market_slug, outcome_label, market_type,
            end_at, observed_at, resolved_at, market_probability, net_yield, annualized_return, volume_usdc,
            tags_json, payload, payload_checksum, created_at, updated_at
@@ -2682,7 +2682,7 @@ function trading_storage_observations_upsert(array $items): int
                OR (lifecycle = 'RESOLVED' AND VALUES(lifecycle) <> 'RESOLVED'), updated_at, VALUES(updated_at)),
            payload_checksum = IF(payload_checksum = VALUES(payload_checksum)
                OR (lifecycle = 'RESOLVED' AND VALUES(lifecycle) <> 'RESOLVED'), payload_checksum, VALUES(payload_checksum)),
-           lifecycle = IF(lifecycle = 'RESOLVED' OR VALUES(lifecycle) = 'RESOLVED', 'RESOLVED', VALUES(lifecycle))'
+           lifecycle = IF(lifecycle = 'RESOLVED' OR VALUES(lifecycle) = 'RESOLVED', 'RESOLVED', VALUES(lifecycle))"
     );
     $count = 0;
     $pdo->beginTransaction();
