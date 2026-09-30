@@ -57,8 +57,10 @@ const priceActionSpreadBps = (settings) => {
   return Number.isFinite(candidate) ? Math.min(100, Math.max(0, candidate)) : 2
 }
 
+const priceActionZoneIdentity = (zone) => zone?.firstTime ?? zone?.lastTime ?? zone?.firstIndex ?? 'zone'
+
 const priceActionSignalKey = ({ assetSymbol, timeframeId, profile, settings }) => {
-  const zoneIdentity = profile.zone?.firstTime ?? profile.zone?.lastTime ?? profile.zone?.firstIndex ?? 'zone'
+  const zoneIdentity = priceActionZoneIdentity(profile.zone)
   // Sizing and executable fill assumptions are part of an entry instruction.
   // A pending order is rebuilt when either is changed, rather than keeping an
   // instruction whose displayed capital or bid/ask model is out of date.
@@ -76,6 +78,84 @@ const isPendingPriceActionOrderProfile = (profile) => {
   return (profile.gates ?? [])
     .filter((gate) => !['zone', 'pullback'].includes(gate.id))
     .every((gate) => gate.passed !== false)
+}
+
+// A timeframe can offer more than one independent FVG inside its active
+// pullback range. The dashboard still exposes a primary candidate for a compact
+// summary, while the runner must retain every zone-specific instruction. A
+// signal key then prevents reopening the exact same zone.
+const priceActionProfileVariants = (profile, { includeInactive = false } = {}) => {
+  if (!profile) return []
+  const zoneCandidates = Array.isArray(profile.zoneCandidates) ? profile.zoneCandidates : []
+  if (!zoneCandidates.length) return [profile]
+
+  return zoneCandidates
+    .filter((candidate) => candidate?.side && candidate?.zone)
+    .filter((candidate) => [candidate.entryForMinRR, candidate.stop, candidate.tp1, candidate.weightedTarget].every(Number.isFinite))
+    .map((candidate) => {
+      const gates = (profile.gates ?? []).map((itemGate) => {
+        if (itemGate.id === 'trend') return { ...itemGate, passed: candidate.directionEligible }
+        if (itemGate.id === 'zone') return { ...itemGate, passed: candidate.zoneHit }
+        if (itemGate.id === 'pullback') return { ...itemGate, passed: candidate.zoneHit }
+        if (itemGate.id === 'unfilled-zone') {
+          return {
+            ...itemGate,
+            passed: !candidate.invalidatedByPrematureTouch && (!candidate.zoneTouched || candidate.zoneHit),
+          }
+        }
+        if (itemGate.id === 'rr') return { ...itemGate, passed: candidate.rrEligible }
+        return itemGate
+      })
+      const prerequisitesMet = gates
+        .filter((itemGate) => !['zone', 'pullback', 'unfilled-zone', 'rr'].includes(itemGate.id))
+        .every((itemGate) => itemGate.passed !== false)
+      const eligible = candidate.eligible && !candidate.invalidatedByPrematureTouch
+      const ready = eligible && candidate.zoneHit && prerequisitesMet
+      const waiting = eligible && !candidate.zoneTouched && prerequisitesMet
+      return {
+        ...profile,
+        status: ready ? 'ready' : waiting ? 'watch' : 'neutral',
+        mode: 'screening',
+        side: candidate.side,
+        directionalSide: candidate.side,
+        zone: candidate.zone,
+        zoneHit: candidate.zoneHit,
+        zoneTouched: candidate.zoneTouched,
+        entry: candidate.entryForMinRR,
+        stop: candidate.stop,
+        tp1: candidate.tp1,
+        tp2: candidate.tp2,
+        tp2Zone: candidate.tp2Zone,
+        weightedTarget: candidate.weightedTarget,
+        rewardRisk: candidate.rewardRisk,
+        activeCandidate: candidate,
+        gates,
+        reason: candidate.reason || profile.reason,
+      }
+    })
+    .filter((candidate) => includeInactive || candidate.status === 'ready' || candidate.status === 'watch')
+}
+
+const priceActionProfilesForAsset = (asset) => {
+  const candidates = Object.entries(asset?.trends ?? {})
+    .flatMap(([timeframeId, item]) => priceActionProfileVariants(item?.tradeProfile).map((profile) => ({ timeframeId, item, profile })))
+    .sort((left, right) =>
+      (PRICE_ACTION_TIMEFRAME_PRIORITY[left.timeframeId] ?? 99) - (PRICE_ACTION_TIMEFRAME_PRIORITY[right.timeframeId] ?? 99)
+    )
+  // Avoid opening the same market independently on 1H, 4H and 1D at once.
+  // Within the selected execution timeframe, though, every distinct FVG keeps
+  // its own pending or market instruction.
+  const timeframeId = candidates[0]?.timeframeId
+  return timeframeId ? candidates.filter((candidate) => candidate.timeframeId === timeframeId) : []
+}
+
+const priceActionProfileForSignal = ({ assetSymbol, timeframeId, item, signalKey, entryZone, side, settings }) => {
+  const profiles = priceActionProfileVariants(item?.tradeProfile, { includeInactive: true })
+  return profiles.find((profile) =>
+    priceActionSignalKey({ assetSymbol, timeframeId, profile, settings }) === signalKey
+  ) ?? profiles.find((profile) =>
+    profile.side === side && priceActionZoneIdentity(profile.zone) === priceActionZoneIdentity(entryZone)
+  ) ?? null
 }
 
 const validPriceActionTp2 = ({ side, tp1, tp2 }) => {
@@ -289,76 +369,62 @@ export const executeReadyPriceActionProfiles = async ({
 } = {}) => {
   if (!matrix?.assets || !settings?.enabled) return []
   const existingSignals = new Set(trades.map((trade) => trade.signalKey).filter(Boolean))
-  const openAssets = new Set(
-    trades
-      .filter((trade) => trade.status === 'running' && trade.strategyId === PRICE_ACTION_STRUCTURE_ID)
-      .map((trade) => trade.assetSymbol)
-      .filter(Boolean)
-  )
   const outcomes = []
 
   for (const asset of matrix.assets) {
-    if (openAssets.has(asset.symbol)) continue
-    const candidates = Object.entries(asset.trends ?? {})
-      .map(([timeframeId, item]) => ({ timeframeId, item, profile: item?.tradeProfile }))
+    const candidates = priceActionProfilesForAsset(asset)
       .filter(({ profile }) => profile?.status === 'ready')
       .filter(({ profile }) => [profile.entry, profile.stop, profile.tp1, profile.weightedTarget].every(Number.isFinite))
-      .sort((left, right) =>
-        (PRICE_ACTION_TIMEFRAME_PRIORITY[left.timeframeId] ?? 99) - (PRICE_ACTION_TIMEFRAME_PRIORITY[right.timeframeId] ?? 99)
-      )
-    const candidate = candidates[0]
-    if (!candidate) continue
+    for (const { timeframeId, item, profile } of candidates) {
+      const signalKey = priceActionSignalKey({ assetSymbol: asset.symbol, timeframeId, profile, settings })
+      if (existingSignals.has(signalKey)) continue
 
-    const { timeframeId, item, profile } = candidate
-    const signalKey = priceActionSignalKey({ assetSymbol: asset.symbol, timeframeId, profile, settings })
-    if (existingSignals.has(signalKey)) continue
-
-    const prepared = priceActionOrderPlan({
-      assetSymbol: asset.symbol,
-      timeframeId,
-      item,
-      profile,
-      equitySats,
-      btcPrice,
-      settings,
-    })
-    if (!prepared.ok) {
-      outcomes.push({ assetSymbol: asset.symbol, timeframeId, action: 'rejected', reason: prepared.reason })
-      continue
+      const prepared = priceActionOrderPlan({
+        assetSymbol: asset.symbol,
+        timeframeId,
+        item,
+        profile,
+        equitySats,
+        btcPrice,
+        settings,
+      })
+      if (!prepared.ok) {
+        outcomes.push({ assetSymbol: asset.symbol, timeframeId, action: 'rejected', reason: prepared.reason })
+        continue
+      }
+      const order = prepared.order
+      if (dryRun) {
+        outcomes.push({ assetSymbol: asset.symbol, timeframeId, action: 'would_open', plan: order })
+        continue
+      }
+      let opened
+      try {
+        opened = await executor.openPosition(order)
+      } catch (error) {
+        outcomes.push({ assetSymbol: asset.symbol, timeframeId, action: 'rejected', reason: error.message })
+        continue
+      }
+      Object.assign(opened, {
+        assetSymbol: asset.symbol,
+        timeframeId,
+        strategyId: PRICE_ACTION_STRUCTURE_ID,
+        priceActionProtocol: PRICE_ACTION_POSITION_PROTOCOL,
+        signalKey,
+        signalCandleTime: item.asOf ?? null,
+        tp1: profile.tp1,
+        tp2: order.tp2,
+        entryZone: profile.zone ? { ...profile.zone } : null,
+        tp2Zone: profile.tp2Zone ? { ...profile.tp2Zone } : null,
+        plan: {
+          reason: `${profile.side} ${item.reason ?? ''}`.trim(),
+          rr: profile.rewardRisk,
+          riskSats: order.riskSats,
+        },
+      })
+      trades.push(opened)
+      existingSignals.add(signalKey)
+      outcomes.push({ assetSymbol: asset.symbol, timeframeId, action: 'opened', position: opened })
     }
-    const order = prepared.order
-    if (dryRun) {
-      outcomes.push({ assetSymbol: asset.symbol, timeframeId, action: 'would_open', plan: order })
-      continue
-    }
-    let opened
-    try {
-      opened = await executor.openPosition(order)
-    } catch (error) {
-      outcomes.push({ assetSymbol: asset.symbol, timeframeId, action: 'rejected', reason: error.message })
-      continue
-    }
-    Object.assign(opened, {
-      assetSymbol: asset.symbol,
-      timeframeId,
-      strategyId: PRICE_ACTION_STRUCTURE_ID,
-      priceActionProtocol: PRICE_ACTION_POSITION_PROTOCOL,
-      signalKey,
-      signalCandleTime: item.asOf ?? null,
-      tp1: profile.tp1,
-      tp2: order.tp2,
-      entryZone: profile.zone ? { ...profile.zone } : null,
-      tp2Zone: profile.tp2Zone ? { ...profile.tp2Zone } : null,
-      plan: {
-        reason: `${profile.side} ${item.reason ?? ''}`.trim(),
-        rr: profile.rewardRisk,
-        riskSats: order.riskSats,
-      },
-    })
-    trades.push(opened)
-    existingSignals.add(signalKey)
-    openAssets.add(asset.symbol)
-    outcomes.push({ assetSymbol: asset.symbol, timeframeId, action: 'opened', position: opened })
   }
   return outcomes
 }
@@ -374,51 +440,38 @@ export const placePendingPriceActionOrders = async ({
 } = {}) => {
   if (!matrix?.assets || !settings?.enabled || typeof executor.placeOrder !== 'function') return []
   const existingSignals = new Set(trades.map((trade) => trade.signalKey).filter(Boolean))
-  const occupiedAssets = new Set(
-    trades
-      .filter((trade) => ['running', 'open'].includes(trade.status) && trade.strategyId === PRICE_ACTION_STRUCTURE_ID)
-      .map((trade) => trade.assetSymbol)
-      .filter(Boolean)
-  )
   const outcomes = []
 
   for (const asset of matrix.assets) {
-    if (occupiedAssets.has(asset.symbol)) continue
-    const candidate = Object.entries(asset.trends ?? {})
-      .map(([timeframeId, item]) => ({ timeframeId, item, profile: item?.tradeProfile }))
+    const candidates = priceActionProfilesForAsset(asset)
       .filter(({ profile }) => isPendingPriceActionOrderProfile(profile))
-      .sort((left, right) =>
-        (PRICE_ACTION_TIMEFRAME_PRIORITY[left.timeframeId] ?? 99) - (PRICE_ACTION_TIMEFRAME_PRIORITY[right.timeframeId] ?? 99)
-      )[0]
-    if (!candidate) continue
-
-    const { timeframeId, item, profile } = candidate
-    const prepared = priceActionOrderPlan({
-      assetSymbol: asset.symbol,
-      timeframeId,
-      item,
-      profile,
-      equitySats,
-      btcPrice,
-      settings,
-    })
-    if (!prepared.ok) {
-      outcomes.push({ assetSymbol: asset.symbol, timeframeId, action: 'rejected', reason: prepared.reason })
-      continue
-    }
-    if (existingSignals.has(prepared.order.signalKey)) continue
-    if (dryRun) {
-      outcomes.push({ assetSymbol: asset.symbol, timeframeId, action: 'would_place', order: prepared.order })
-      continue
-    }
-    try {
-      const order = await executor.placeOrder(prepared.order)
-      trades.push(order)
-      existingSignals.add(order.signalKey)
-      occupiedAssets.add(asset.symbol)
-      outcomes.push({ assetSymbol: asset.symbol, timeframeId, action: 'placed', order })
-    } catch (error) {
-      outcomes.push({ assetSymbol: asset.symbol, timeframeId, action: 'rejected', reason: error.message })
+    for (const { timeframeId, item, profile } of candidates) {
+      const prepared = priceActionOrderPlan({
+        assetSymbol: asset.symbol,
+        timeframeId,
+        item,
+        profile,
+        equitySats,
+        btcPrice,
+        settings,
+      })
+      if (!prepared.ok) {
+        outcomes.push({ assetSymbol: asset.symbol, timeframeId, action: 'rejected', reason: prepared.reason })
+        continue
+      }
+      if (existingSignals.has(prepared.order.signalKey)) continue
+      if (dryRun) {
+        outcomes.push({ assetSymbol: asset.symbol, timeframeId, action: 'would_place', order: prepared.order })
+        continue
+      }
+      try {
+        const order = await executor.placeOrder(prepared.order)
+        trades.push(order)
+        existingSignals.add(order.signalKey)
+        outcomes.push({ assetSymbol: asset.symbol, timeframeId, action: 'placed', order })
+      } catch (error) {
+        outcomes.push({ assetSymbol: asset.symbol, timeframeId, action: 'rejected', reason: error.message })
+      }
     }
   }
   return outcomes
@@ -431,7 +484,15 @@ export const reconcilePendingPriceActionOrders = async ({ executor, orders = [],
   )) {
     const asset = matrix?.assets?.find((candidate) => candidate.symbol === order.assetSymbol)
     const item = asset?.trends?.[order.timeframeId]
-    const profile = item?.tradeProfile
+    const profile = priceActionProfileForSignal({
+      assetSymbol: order.assetSymbol,
+      timeframeId: order.timeframeId,
+      item,
+      signalKey: order.signalKey,
+      entryZone: order.entryZone,
+      side: order.side,
+      settings,
+    })
     const stillValid = isPendingPriceActionOrderProfile(profile) &&
       priceActionSignalKey({ assetSymbol: order.assetSymbol, timeframeId: order.timeframeId, profile, settings }) === order.signalKey
     if (stillValid) continue

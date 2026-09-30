@@ -78,9 +78,15 @@ const persistAssetChartSelectionToUrl = ({ replace = false } = {}) => {
 
 const nf = (digits) => new Intl.NumberFormat('cs-CZ', { minimumFractionDigits: digits, maximumFractionDigits: digits })
 
+const smallValuePrecision = (value, defaultDigits = 2) => {
+  const magnitude = Math.abs(Number(value))
+  if (!(magnitude > 0) || magnitude >= 0.01) return defaultDigits
+  return Math.min(6, Math.max(4, Math.ceil(-Math.log10(magnitude)) + 1))
+}
+
 const usd = (value, digits = 2) => {
   if (!Number.isFinite(value)) return '–'
-  const precision = digits === 2 && value !== 0 && Math.abs(value) < 0.01 ? 4 : digits
+  const precision = digits === 2 ? smallValuePrecision(value, digits) : digits
   return `$${nf(precision).format(value)}`
 }
 const priceFractionDigits = (value) => {
@@ -122,7 +128,8 @@ const assetCurrentPrice = (asset) => {
 
 const signedPct = (value, digits = 2) => {
   if (!Number.isFinite(value)) return { text: '–', className: '' }
-  const text = `${value > 0 ? '+' : value < 0 ? '−' : ''}${nf(digits).format(Math.abs(value))} %`
+  const precision = digits === 2 ? smallValuePrecision(value, digits) : digits
+  const text = `${value > 0 ? '+' : value < 0 ? '−' : ''}${nf(precision).format(Math.abs(value))} %`
   return { text, className: value > 0 ? 'pos' : value < 0 ? 'neg' : '' }
 }
 
@@ -160,7 +167,7 @@ const ago = (value) => {
 
 const signedUsd = (value) => {
   if (!Number.isFinite(value)) return { text: '–', className: '' }
-  const precision = value !== 0 && Math.abs(value) < 0.01 ? 4 : 2
+  const precision = smallValuePrecision(value)
   const text = `${value > 0 ? '+' : value < 0 ? '−' : ''}$${nf(precision).format(Math.abs(value))}`
   return { text, className: value > 0 ? 'pos' : value < 0 ? 'neg' : '' }
 }
@@ -172,11 +179,36 @@ const usdFromSats = (value, quoteSatsPerUsd = null) => {
   return Number.isFinite(btcPrice) && btcPrice > 0 ? (value / SATS_PER_BTC) * btcPrice : null
 }
 
-const positionPnlUsd = (position) => usdFromSats(position?.plSats, position?.quoteSatsPerUsd)
+const linearFeeRate = (position) => {
+  const rate = Number(position?.feeRate)
+  return Number.isFinite(rate) && rate >= 0 ? rate : 0.0006
+}
+
+const linearPnlUsd = (position) => {
+  if (Number.isFinite(position?.plUsd)) return position.plUsd
+  if (position?.pricingModel !== 'linear-usd' || !Number.isFinite(position?.entry)) return null
+  const quantityUsd = position?.status === 'running'
+    ? position.remainingQuantityUsd ?? position.quantityUsd
+    : position.quantityUsd
+  const exitPrice = position?.exitPrice ?? position?.executableExitPrice ?? position?.markPrice
+  if (![quantityUsd, exitPrice].every(Number.isFinite) || !(quantityUsd > 0)) return null
+  const direction = position.side === 'long' ? 1 : -1
+  const gross = quantityUsd * ((exitPrice - position.entry) / position.entry) * direction
+  const openingFee = Number.isFinite(position?.openingFeeUsd)
+    ? position.openingFeeUsd
+    : quantityUsd * linearFeeRate(position)
+  const closingFee = Number.isFinite(position?.closingFeeUsd)
+    ? position.closingFeeUsd
+    : quantityUsd * linearFeeRate(position)
+  return gross - openingFee - closingFee
+}
+
+const positionPnlUsd = (position) => linearPnlUsd(position) ?? usdFromSats(position?.plSats, position?.quoteSatsPerUsd)
 const positionPnlPercent = (position) => {
   const pnl = positionPnlUsd(position)
-  return Number.isFinite(pnl) && Number.isFinite(position?.quantityUsd) && position.quantityUsd > 0
-    ? (pnl / position.quantityUsd) * 100
+  const amount = position?.status === 'running' ? position.remainingQuantityUsd ?? position.quantityUsd : position?.quantityUsd
+  return Number.isFinite(pnl) && Number.isFinite(amount) && amount > 0
+    ? (pnl / amount) * 100
     : null
 }
 
@@ -189,10 +221,17 @@ const positionPnlCell = (position) => {
   ])
 }
 
-const satFeesUsd = (position) => usdFromSats(
-  (position?.openingFeeSats || 0) + (position?.closingFeeSats || 0) + (position?.carryFeesSats || 0),
-  position?.quoteSatsPerUsd
-)
+const satFeesUsd = (position) => {
+  if (position?.pricingModel === 'linear-usd' && Number.isFinite(position?.quantityUsd)) {
+    const opening = Number.isFinite(position?.openingFeeUsd) ? position.openingFeeUsd : position.quantityUsd * linearFeeRate(position)
+    const closing = Number.isFinite(position?.closingFeeUsd) ? position.closingFeeUsd : position.quantityUsd * linearFeeRate(position)
+    return opening + closing
+  }
+  return usdFromSats(
+    (position?.openingFeeSats || 0) + (position?.closingFeeSats || 0) + (position?.carryFeesSats || 0),
+    position?.quoteSatsPerUsd
+  )
+}
 
 const el = (tag, attributes = {}, children = []) => {
   const node = SVG_TAGS.has(tag)
@@ -835,8 +874,9 @@ const entryZonesForDisplay = (entry) => {
   const setupZones = setupZonesForEntry(entry)
     .filter((zone) => zone.type === type)
   const watchedZones = watchedEntryZones(profile, type)
+  const touchedZones = currentSetupTouchedZones(entry.item, type)
   const invalidatedZones = currentSetupInvalidatedZones(entry.item, type, pullback)
-  return uniqueZones([...setupZones, ...watchedZones, ...invalidatedZones])
+  return uniqueZones([...setupZones, ...watchedZones, ...touchedZones, ...invalidatedZones])
     .filter((zone) => zone.activeSetupZone || zone.currentSetupInvalidatedZone || zoneOverlapsRange(zone, pullback))
 }
 
@@ -2657,7 +2697,8 @@ const priceActionUsdPnl = (position, target, quantityUsd) => {
   if (![position?.entry, target, quantityUsd].every(Number.isFinite)) return null
   const direction = position.side === 'long' ? 1 : -1
   const executableTarget = priceActionExecutableExit(position, target)
-  return quantityUsd * ((executableTarget - position.entry) / position.entry) * direction
+  const gross = quantityUsd * ((executableTarget - position.entry) / position.entry) * direction
+  return gross - quantityUsd * linearFeeRate(position) * 2
 }
 
 const priceActionLevelCell = ({ label, position, target, quantityUsd, completed = false }) => {

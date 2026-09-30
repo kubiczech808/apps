@@ -273,6 +273,65 @@ test('a complete PA setup places a bracketed limit order before its entry is hit
   assert.deepEqual(late, [])
 })
 
+test('a second fresh zone on an occupied asset receives its own pending instruction', async () => {
+  const calls = []
+  const executor = {
+    placeOrder: async (order) => {
+      calls.push(order)
+      return { ...order, id: `pending-${calls.length}`, status: 'open', stopLoss: order.stop }
+    },
+  }
+  const candidate = (firstTime, low, high, entry) => ({
+    side: 'short',
+    zone: { type: 'supply', low, high, firstTime },
+    directionEligible: true,
+    pullbackEligible: true,
+    rrEligible: true,
+    eligible: true,
+    zoneHit: false,
+    zoneTouched: false,
+    entryForMinRR: entry,
+    stop: 157.72,
+    tp1: 156.7,
+    tp2: 156.1,
+    weightedTarget: 156.4,
+    rewardRisk: 2.4,
+  })
+  const claimed = candidate(START, 157.24, 157.32, 157.24)
+  const additional = candidate(START + HOUR, 157.15, 157.33, 157.15)
+  const profile = {
+    status: 'watch', mode: 'screening', side: 'short',
+    zoneCandidates: [claimed, additional],
+    gates: [
+      { id: 'trend', passed: true }, { id: 'zone', passed: false },
+      { id: 'pullback', passed: false }, { id: 'unfilled-zone', passed: true },
+      { id: 'rr', passed: true }, { id: 'candle', passed: true },
+    ],
+  }
+  const settings = {
+    enabled: true,
+    risk: { feeRate: 0.0006, minMarginSats: 1 },
+    priceActionStructure: { riskPct: 1, leverage: 1, spreadBps: 2 },
+  }
+  const alreadyOpen = {
+    id: 'running-first-zone', status: 'running', strategyId: PRICE_ACTION_STRUCTURE_ID,
+    assetSymbol: 'USDJPY', timeframeId: '1h', side: 'short',
+    signalKey: `${PRICE_ACTION_STRUCTURE_ID}:USDJPY:1h:short:${START}:157.24:leverage-1:spread-2`,
+  }
+
+  const placed = await placePendingPriceActionOrders({
+    executor,
+    matrix: { assets: [{ symbol: 'USDJPY', trends: { '1h': { asOf: START + 2 * HOUR, tradeProfile: profile } } }] },
+    trades: [alreadyOpen], equitySats: 1_000_000, btcPrice: 80_000, settings,
+  })
+
+  assert.equal(placed.length, 1)
+  assert.equal(placed[0].action, 'placed')
+  assert.deepEqual(calls[0].entryZone, additional.zone)
+  assert.equal(calls[0].assetSymbol, 'USDJPY')
+  assert.equal(calls[0].timeframeId, '1h')
+})
+
 test('changing the PA leverage replaces a pending spot instruction without changing its structural stop', async () => {
   const calls = []
   const executor = {

@@ -49,6 +49,9 @@ test('paper executor marks an FX trade on its own candles and takes TP1 before T
   assert.equal(firstExit.exitPrice, 0.72)
   const firstGross = 50 * ((0.72 - 0.71) / 0.71) * 1250
   assert.equal(firstExit.plSats, Math.round(firstGross - firstExit.openingFeeSats - firstExit.closingFeeSats))
+  const firstGrossUsd = 50 * ((0.72 - 0.71) / 0.71)
+  assert.ok(Math.abs(firstExit.plUsd - (firstGrossUsd - 50 * 0.0006 * 2)) < 1e-12)
+  assert.ok(firstExit.openingFeeUsd > 0 && firstExit.closingFeeUsd > 0)
   assert.equal(firstExit.openingFeeSats + trade.openingFeeSats, openingFeeSats)
   assert.equal(trade.realizedPlSats, 0, 'the open half must not carry the already-closed TP1 P/L')
 

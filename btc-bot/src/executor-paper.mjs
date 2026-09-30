@@ -55,7 +55,8 @@ export const createPaperExecutor = ({
     return quantityUsd * ((price - trade.entry) / trade.entry) * direction * trade.quoteSatsPerUsd
   }
 
-  const linearFeeSats = (trade, quantityUsd) => Math.ceil(quantityUsd * feeRate * trade.quoteSatsPerUsd)
+  const linearFeeSats = (trade, quantityUsd) => Math.ceil(quantityUsd * (Number(trade.feeRate) || feeRate) * trade.quoteSatsPerUsd)
+  const linearFeeUsd = (trade, quantityUsd) => quantityUsd * (Number(trade.feeRate) || feeRate)
 
   const linearEntryPrice = (trade, marketPrice) => effectiveLinearFillPrice({
     side: trade.side,
@@ -107,6 +108,10 @@ export const createPaperExecutor = ({
       marketExitPrice,
       markPrice: exitPrice,
       plSats: Math.round(grossSats - openingFeeSats - closingFeeSats),
+      grossUsd: grossSats / trade.quoteSatsPerUsd,
+      openingFeeUsd: linearFeeUsd(trade, quantityUsd),
+      closingFeeUsd: linearFeeUsd(trade, quantityUsd),
+      plUsd: (grossSats / trade.quoteSatsPerUsd) - linearFeeUsd(trade, quantityUsd) * 2,
       openingFeeSats,
       closingFeeSats,
       carryFeesSats: 0,
@@ -125,6 +130,7 @@ export const createPaperExecutor = ({
       quoteSatsPerUsd: trade.quoteSatsPerUsd,
       capitalUsd: Number.isFinite(trade.capitalUsd) ? trade.capitalUsd * fraction : null,
       riskUsd: Number.isFinite(trade.riskUsd) ? trade.riskUsd * fraction : null,
+      feeRate: trade.feeRate ?? feeRate,
       spreadBps: trade.spreadBps,
     }
   }
@@ -159,6 +165,10 @@ export const createPaperExecutor = ({
     })
     trade.partialExits = [...(trade.partialExits ?? []), record]
     trade.openingFeeSats = Math.max(0, (trade.openingFeeSats ?? 0) - openingFeeSats)
+    trade.openingFeeUsd = Math.max(
+      0,
+      (trade.openingFeeUsd ?? linearFeeUsd(trade, trade.quantityUsd)) - linearFeeUsd(trade, quantityUsd)
+    )
     if (existingLedger) {
       trade.closingFeeSats = Math.max(0, (trade.closingFeeSats ?? 0) - closingFeeSats)
       trade.realizedPlSats = Math.round((trade.realizedPlSats ?? 0) - (grossSats - closingFeeSats))
@@ -172,10 +182,15 @@ export const createPaperExecutor = ({
     const executableExitPrice = linearExitPrice(trade, marketPrice)
     trade.markPrice = marketPrice
     trade.executableExitPrice = executableExitPrice
+    const grossUsd = linearGrossSats(trade, executableExitPrice, quantity) / trade.quoteSatsPerUsd
+    const closingFeeUsd = linearFeeUsd(trade, quantity)
+    trade.unrealizedPlUsd = grossUsd - closingFeeUsd
     trade.unrealizedPlSats = Math.round(linearGrossSats(trade, executableExitPrice, quantity) - closingFee)
     trade.plSats = Math.round(
       -(trade.openingFeeSats ?? 0) + (trade.realizedPlSats ?? 0) + trade.unrealizedPlSats
     )
+    trade.plUsd = -(trade.openingFeeUsd ?? linearFeeUsd(trade, quantity)) +
+      (trade.realizedPlUsd ?? 0) + trade.unrealizedPlUsd
   }
 
   const settleLinear = (trade, marketExitPrice, exitReason, at) => {
@@ -183,8 +198,12 @@ export const createPaperExecutor = ({
     const closingFee = linearFeeSats(trade, quantity)
     const exitPrice = linearExitPrice(trade, marketExitPrice)
     const gross = linearGrossSats(trade, exitPrice, quantity)
+    const grossUsd = gross / trade.quoteSatsPerUsd
+    const closingFeeUsd = linearFeeUsd(trade, quantity)
     trade.realizedPlSats = Math.round((trade.realizedPlSats ?? 0) + gross - closingFee)
+    trade.realizedPlUsd = (trade.realizedPlUsd ?? 0) + grossUsd - closingFeeUsd
     trade.closingFeeSats = (trade.closingFeeSats ?? 0) + closingFee
+    trade.closingFeeUsd = (trade.closingFeeUsd ?? 0) + closingFeeUsd
     store.balanceSats += trade.marginSats + Math.round(gross - closingFee)
     trade.marginSats = 0
     trade.remainingQuantityUsd = 0
@@ -194,6 +213,7 @@ export const createPaperExecutor = ({
     trade.exitPrice = exitPrice
     trade.markPrice = exitPrice
     trade.plSats = Math.round(-(trade.openingFeeSats ?? 0) + trade.realizedPlSats)
+    trade.plUsd = -(trade.openingFeeUsd ?? linearFeeUsd(trade, quantity)) + trade.realizedPlUsd
     trade.closedAt = at
     trade.exitReason = exitReason
   }
@@ -226,6 +246,7 @@ export const createPaperExecutor = ({
     order.requestedEntry = order.entry
     order.entry = order.entryFill ?? linearEntryPrice(order, order.entry)
     order.openingFeeSats = openingFee
+    order.openingFeeUsd = linearFeeUsd(order, order.quantityUsd)
     order.initialStop = order.stopLoss
     order.initialMarginSats = order.marginSats
     order.remainingQuantityUsd = order.quantityUsd
@@ -382,7 +403,9 @@ export const createPaperExecutor = ({
         exitPrice: null,
         plSats: null,
         openingFeeSats: openingFee,
+        openingFeeUsd: linear ? linearFeeUsd({ ...plan, feeRate: plan.feeRate }, plan.quantityUsd) : null,
         closingFeeSats: null,
+        closingFeeUsd: null,
         carryFeesSats: 0,
         openedAt: now(),
         createdAt: now(),
@@ -399,6 +422,7 @@ export const createPaperExecutor = ({
           quoteSatsPerUsd: plan.quoteSatsPerUsd,
           capitalUsd: plan.capitalUsd,
           riskUsd: plan.riskUsd,
+          feeRate: plan.feeRate ?? feeRate,
           spreadBps: plan.spreadBps,
           entryFill: plan.entryFill,
           stopFill: plan.stopFill,
@@ -453,7 +477,9 @@ export const createPaperExecutor = ({
         exitPrice: null,
         plSats: null,
         openingFeeSats: null,
+        openingFeeUsd: null,
         closingFeeSats: null,
+        closingFeeUsd: null,
         carryFeesSats: 0,
         createdAt: now(),
         openedAt: null,
@@ -469,6 +495,7 @@ export const createPaperExecutor = ({
         quoteSatsPerUsd: plan.quoteSatsPerUsd,
         capitalUsd: plan.capitalUsd,
         riskUsd: plan.riskUsd,
+        feeRate: plan.feeRate ?? feeRate,
         spreadBps: plan.spreadBps,
         stopFill: plan.stopFill,
         takeProfitFill: plan.takeProfitFill,

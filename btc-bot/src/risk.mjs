@@ -359,6 +359,7 @@ export const planLinearPosition = ({
     quoteSatsPerUsd,
     capitalUsd: quantityUsd * (1 + config.feeRate),
     riskUsd: (actualRiskSats + feeSats) / quoteSatsPerUsd,
+    feeRate: config.feeRate,
     spreadBps,
     notionalCapped,
   }
