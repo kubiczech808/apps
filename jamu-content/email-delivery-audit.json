@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-09-30T10:06:29+00:00",
+  "generated_at": "2026-09-30T10:08:28+00:00",
   "plugins": [
     {
       "file": "ecomail/ecomail.php",
@@ -5825,6 +5825,7 @@
       "has_html": true,
       "html_has_raw_qp_artifacts": false,
       "selected_variant": "",
+      "mime_prepared": true,
       "mime_encoding": "base64",
       "mime_has_base64_header": true,
       "mime_body_has_raw_qp_artifacts": false
@@ -5832,23 +5833,38 @@
     {
       "email_id": "customer_failed_order",
       "language": "en",
-      "error": "PHPMailer\\PHPMailer\\Exception",
-      "error_file": "PHPMailer.php",
-      "error_line": 1779
+      "html_bytes": 0,
+      "has_html": false,
+      "html_has_raw_qp_artifacts": false,
+      "selected_variant": "jamu-en",
+      "mime_prepared": false,
+      "mime_encoding": "base64",
+      "mime_has_base64_header": false,
+      "mime_body_has_raw_qp_artifacts": false
     },
     {
       "email_id": "customer_failed_order",
       "language": "de",
-      "error": "PHPMailer\\PHPMailer\\Exception",
-      "error_file": "PHPMailer.php",
-      "error_line": 1779
+      "html_bytes": 0,
+      "has_html": false,
+      "html_has_raw_qp_artifacts": false,
+      "selected_variant": "jamu-de",
+      "mime_prepared": false,
+      "mime_encoding": "base64",
+      "mime_has_base64_header": false,
+      "mime_body_has_raw_qp_artifacts": false
     },
     {
       "email_id": "customer_failed_order",
       "language": "pl",
-      "error": "PHPMailer\\PHPMailer\\Exception",
-      "error_file": "PHPMailer.php",
-      "error_line": 1779
+      "html_bytes": 0,
+      "has_html": false,
+      "html_has_raw_qp_artifacts": false,
+      "selected_variant": "jamu-pl",
+      "mime_prepared": false,
+      "mime_encoding": "base64",
+      "mime_has_base64_header": false,
+      "mime_body_has_raw_qp_artifacts": false
     },
     {
       "email_id": "customer_on_hold_order",
@@ -5857,6 +5873,7 @@
       "has_html": true,
       "html_has_raw_qp_artifacts": false,
       "selected_variant": "",
+      "mime_prepared": true,
       "mime_encoding": "base64",
       "mime_has_base64_header": true,
       "mime_body_has_raw_qp_artifacts": false
@@ -5864,23 +5881,38 @@
     {
       "email_id": "customer_on_hold_order",
       "language": "en",
-      "error": "PHPMailer\\PHPMailer\\Exception",
-      "error_file": "PHPMailer.php",
-      "error_line": 1779
+      "html_bytes": 0,
+      "has_html": false,
+      "html_has_raw_qp_artifacts": false,
+      "selected_variant": "jamu-en",
+      "mime_prepared": false,
+      "mime_encoding": "base64",
+      "mime_has_base64_header": false,
+      "mime_body_has_raw_qp_artifacts": false
     },
     {
       "email_id": "customer_on_hold_order",
       "language": "de",
-      "error": "PHPMailer\\PHPMailer\\Exception",
-      "error_file": "PHPMailer.php",
-      "error_line": 1779
+      "html_bytes": 0,
+      "has_html": false,
+      "html_has_raw_qp_artifacts": false,
+      "selected_variant": "jamu-de",
+      "mime_prepared": false,
+      "mime_encoding": "base64",
+      "mime_has_base64_header": false,
+      "mime_body_has_raw_qp_artifacts": false
     },
     {
       "email_id": "customer_on_hold_order",
       "language": "pl",
-      "error": "PHPMailer\\PHPMailer\\Exception",
-      "error_file": "PHPMailer.php",
-      "error_line": 1779
+      "html_bytes": 0,
+      "has_html": false,
+      "html_has_raw_qp_artifacts": false,
+      "selected_variant": "jamu-pl",
+      "mime_prepared": false,
+      "mime_encoding": "base64",
+      "mime_has_base64_header": false,
+      "mime_body_has_raw_qp_artifacts": false
     },
     {
       "email_id": "customer_processing_order",
@@ -5889,6 +5921,7 @@
       "has_html": true,
       "html_has_raw_qp_artifacts": false,
       "selected_variant": "",
+      "mime_prepared": true,
       "mime_encoding": "base64",
       "mime_has_base64_header": true,
       "mime_body_has_raw_qp_artifacts": false
@@ -5896,23 +5929,38 @@
     {
       "email_id": "customer_processing_order",
       "language": "en",
-      "error": "PHPMailer\\PHPMailer\\Exception",
-      "error_file": "PHPMailer.php",
-      "error_line": 1779
+      "html_bytes": 0,
+      "has_html": false,
+      "html_has_raw_qp_artifacts": false,
+      "selected_variant": "jamu-en",
+      "mime_prepared": false,
+      "mime_encoding": "base64",
+      "mime_has_base64_header": false,
+      "mime_body_has_raw_qp_artifacts": false
     },
     {
       "email_id": "customer_processing_order",
       "language": "de",
-      "error": "PHPMailer\\PHPMailer\\Exception",
-      "error_file": "PHPMailer.php",
-      "error_line": 1779
+      "html_bytes": 0,
+      "has_html": false,
+      "html_has_raw_qp_artifacts": false,
+      "selected_variant": "jamu-de",
+      "mime_prepared": false,
+      "mime_encoding": "base64",
+      "mime_has_base64_header": false,
+      "mime_body_has_raw_qp_artifacts": false
     },
     {
       "email_id": "customer_processing_order",
       "language": "pl",
-      "error": "PHPMailer\\PHPMailer\\Exception",
-      "error_file": "PHPMailer.php",
-      "error_line": 1779
+      "html_bytes": 0,
+      "has_html": false,
+      "html_has_raw_qp_artifacts": false,
+      "selected_variant": "jamu-pl",
+      "mime_prepared": false,
+      "mime_encoding": "base64",
+      "mime_has_base64_header": false,
+      "mime_body_has_raw_qp_artifacts": false
     },
     {
       "email_id": "customer_refunded_order",
@@ -5921,6 +5969,7 @@
       "has_html": true,
       "html_has_raw_qp_artifacts": false,
       "selected_variant": "",
+      "mime_prepared": true,
       "mime_encoding": "base64",
       "mime_has_base64_header": true,
       "mime_body_has_raw_qp_artifacts": false
@@ -5928,23 +5977,38 @@
     {
       "email_id": "customer_refunded_order",
       "language": "en",
-      "error": "PHPMailer\\PHPMailer\\Exception",
-      "error_file": "PHPMailer.php",
-      "error_line": 1779
+      "html_bytes": 0,
+      "has_html": false,
+      "html_has_raw_qp_artifacts": false,
+      "selected_variant": "jamu-en",
+      "mime_prepared": false,
+      "mime_encoding": "base64",
+      "mime_has_base64_header": false,
+      "mime_body_has_raw_qp_artifacts": false
     },
     {
       "email_id": "customer_refunded_order",
       "language": "de",
-      "error": "PHPMailer\\PHPMailer\\Exception",
-      "error_file": "PHPMailer.php",
-      "error_line": 1779
+      "html_bytes": 0,
+      "has_html": false,
+      "html_has_raw_qp_artifacts": false,
+      "selected_variant": "jamu-de",
+      "mime_prepared": false,
+      "mime_encoding": "base64",
+      "mime_has_base64_header": false,
+      "mime_body_has_raw_qp_artifacts": false
     },
     {
       "email_id": "customer_refunded_order",
       "language": "pl",
-      "error": "PHPMailer\\PHPMailer\\Exception",
-      "error_file": "PHPMailer.php",
-      "error_line": 1779
+      "html_bytes": 0,
+      "has_html": false,
+      "html_has_raw_qp_artifacts": false,
+      "selected_variant": "jamu-pl",
+      "mime_prepared": false,
+      "mime_encoding": "base64",
+      "mime_has_base64_header": false,
+      "mime_body_has_raw_qp_artifacts": false
     },
     {
       "email_id": "customer_note",
@@ -5953,6 +6017,7 @@
       "has_html": true,
       "html_has_raw_qp_artifacts": false,
       "selected_variant": "",
+      "mime_prepared": true,
       "mime_encoding": "base64",
       "mime_has_base64_header": true,
       "mime_body_has_raw_qp_artifacts": false
@@ -5960,23 +6025,38 @@
     {
       "email_id": "customer_note",
       "language": "en",
-      "error": "PHPMailer\\PHPMailer\\Exception",
-      "error_file": "PHPMailer.php",
-      "error_line": 1779
+      "html_bytes": 0,
+      "has_html": false,
+      "html_has_raw_qp_artifacts": false,
+      "selected_variant": "jamu-en",
+      "mime_prepared": false,
+      "mime_encoding": "base64",
+      "mime_has_base64_header": false,
+      "mime_body_has_raw_qp_artifacts": false
     },
     {
       "email_id": "customer_note",
       "language": "de",
-      "error": "PHPMailer\\PHPMailer\\Exception",
-      "error_file": "PHPMailer.php",
-      "error_line": 1779
+      "html_bytes": 0,
+      "has_html": false,
+      "html_has_raw_qp_artifacts": false,
+      "selected_variant": "jamu-de",
+      "mime_prepared": false,
+      "mime_encoding": "base64",
+      "mime_has_base64_header": false,
+      "mime_body_has_raw_qp_artifacts": false
     },
     {
       "email_id": "customer_note",
       "language": "pl",
-      "error": "PHPMailer\\PHPMailer\\Exception",
-      "error_file": "PHPMailer.php",
-      "error_line": 1779
+      "html_bytes": 0,
+      "has_html": false,
+      "html_has_raw_qp_artifacts": false,
+      "selected_variant": "jamu-pl",
+      "mime_prepared": false,
+      "mime_encoding": "base64",
+      "mime_has_base64_header": false,
+      "mime_body_has_raw_qp_artifacts": false
     },
     {
       "email_id": "customer_reset_password",
@@ -5985,6 +6065,7 @@
       "has_html": true,
       "html_has_raw_qp_artifacts": false,
       "selected_variant": "",
+      "mime_prepared": true,
       "mime_encoding": "base64",
       "mime_has_base64_header": true,
       "mime_body_has_raw_qp_artifacts": false
@@ -5992,23 +6073,38 @@
     {
       "email_id": "customer_reset_password",
       "language": "en",
-      "error": "PHPMailer\\PHPMailer\\Exception",
-      "error_file": "PHPMailer.php",
-      "error_line": 1779
+      "html_bytes": 0,
+      "has_html": false,
+      "html_has_raw_qp_artifacts": false,
+      "selected_variant": "jamu-en",
+      "mime_prepared": false,
+      "mime_encoding": "base64",
+      "mime_has_base64_header": false,
+      "mime_body_has_raw_qp_artifacts": false
     },
     {
       "email_id": "customer_reset_password",
       "language": "de",
-      "error": "PHPMailer\\PHPMailer\\Exception",
-      "error_file": "PHPMailer.php",
-      "error_line": 1779
+      "html_bytes": 0,
+      "has_html": false,
+      "html_has_raw_qp_artifacts": false,
+      "selected_variant": "jamu-de",
+      "mime_prepared": false,
+      "mime_encoding": "base64",
+      "mime_has_base64_header": false,
+      "mime_body_has_raw_qp_artifacts": false
     },
     {
       "email_id": "customer_reset_password",
       "language": "pl",
-      "error": "PHPMailer\\PHPMailer\\Exception",
-      "error_file": "PHPMailer.php",
-      "error_line": 1779
+      "html_bytes": 0,
+      "has_html": false,
+      "html_has_raw_qp_artifacts": false,
+      "selected_variant": "jamu-pl",
+      "mime_prepared": false,
+      "mime_encoding": "base64",
+      "mime_has_base64_header": false,
+      "mime_body_has_raw_qp_artifacts": false
     },
     {
       "email_id": "customer_new_account",
@@ -6017,6 +6113,7 @@
       "has_html": true,
       "html_has_raw_qp_artifacts": false,
       "selected_variant": "",
+      "mime_prepared": true,
       "mime_encoding": "base64",
       "mime_has_base64_header": true,
       "mime_body_has_raw_qp_artifacts": false
@@ -6024,23 +6121,38 @@
     {
       "email_id": "customer_new_account",
       "language": "en",
-      "error": "PHPMailer\\PHPMailer\\Exception",
-      "error_file": "PHPMailer.php",
-      "error_line": 1779
+      "html_bytes": 0,
+      "has_html": false,
+      "html_has_raw_qp_artifacts": false,
+      "selected_variant": "jamu-en",
+      "mime_prepared": false,
+      "mime_encoding": "base64",
+      "mime_has_base64_header": false,
+      "mime_body_has_raw_qp_artifacts": false
     },
     {
       "email_id": "customer_new_account",
       "language": "de",
-      "error": "PHPMailer\\PHPMailer\\Exception",
-      "error_file": "PHPMailer.php",
-      "error_line": 1779
+      "html_bytes": 0,
+      "has_html": false,
+      "html_has_raw_qp_artifacts": false,
+      "selected_variant": "jamu-de",
+      "mime_prepared": false,
+      "mime_encoding": "base64",
+      "mime_has_base64_header": false,
+      "mime_body_has_raw_qp_artifacts": false
     },
     {
       "email_id": "customer_new_account",
       "language": "pl",
-      "error": "PHPMailer\\PHPMailer\\Exception",
-      "error_file": "PHPMailer.php",
-      "error_line": 1779
+      "html_bytes": 0,
+      "has_html": false,
+      "html_has_raw_qp_artifacts": false,
+      "selected_variant": "jamu-pl",
+      "mime_prepared": false,
+      "mime_encoding": "base64",
+      "mime_has_base64_header": false,
+      "mime_body_has_raw_qp_artifacts": false
     },
     {
       "email_id": "customer_verify_email",
@@ -6049,6 +6161,7 @@
       "has_html": true,
       "html_has_raw_qp_artifacts": false,
       "selected_variant": "",
+      "mime_prepared": true,
       "mime_encoding": "base64",
       "mime_has_base64_header": true,
       "mime_body_has_raw_qp_artifacts": false
@@ -6056,23 +6169,38 @@
     {
       "email_id": "customer_verify_email",
       "language": "en",
-      "error": "PHPMailer\\PHPMailer\\Exception",
-      "error_file": "PHPMailer.php",
-      "error_line": 1779
+      "html_bytes": 0,
+      "has_html": false,
+      "html_has_raw_qp_artifacts": false,
+      "selected_variant": "jamu-en",
+      "mime_prepared": false,
+      "mime_encoding": "base64",
+      "mime_has_base64_header": false,
+      "mime_body_has_raw_qp_artifacts": false
     },
     {
       "email_id": "customer_verify_email",
       "language": "de",
-      "error": "PHPMailer\\PHPMailer\\Exception",
-      "error_file": "PHPMailer.php",
-      "error_line": 1779
+      "html_bytes": 0,
+      "has_html": false,
+      "html_has_raw_qp_artifacts": false,
+      "selected_variant": "jamu-de",
+      "mime_prepared": false,
+      "mime_encoding": "base64",
+      "mime_has_base64_header": false,
+      "mime_body_has_raw_qp_artifacts": false
     },
     {
       "email_id": "customer_verify_email",
       "language": "pl",
-      "error": "PHPMailer\\PHPMailer\\Exception",
-      "error_file": "PHPMailer.php",
-      "error_line": 1779
+      "html_bytes": 0,
+      "has_html": false,
+      "html_has_raw_qp_artifacts": false,
+      "selected_variant": "jamu-pl",
+      "mime_prepared": false,
+      "mime_encoding": "base64",
+      "mime_has_base64_header": false,
+      "mime_body_has_raw_qp_artifacts": false
     }
   ],
   "runtime_warning_summary": [
