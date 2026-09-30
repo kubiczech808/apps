@@ -183,6 +183,11 @@ final class Email
             'suppress_filters' => true,
         ]);
 
+        // YayMail may retain historical duplicate base records. Its own loader
+        // deterministically uses the oldest record, so bootstrap each email
+        // name just once as well. This must never rewrite a language variant
+        // from a later duplicate source.
+        $seen_templates = [];
         foreach ($templates as $template_post) {
             if ((string) get_post_meta($template_post->ID, '_yaymail_template_variant', true) !== '') {
                 continue;
@@ -191,6 +196,10 @@ final class Email
             if (!str_starts_with($template_name, 'customer_')) {
                 continue;
             }
+            if (isset($seen_templates[$template_name])) {
+                continue;
+            }
+            $seen_templates[$template_name] = true;
 
             $source = new \YayMail\YayMailTemplate($template_name);
             if (!$source->is_exists()) {
@@ -717,7 +726,7 @@ final class Email
                 continue;
             }
             $name = (string) get_post_meta($template->ID, '_yaymail_template', true);
-            if (str_starts_with($name, 'customer_')) {
+            if (str_starts_with($name, 'customer_') && !isset($result[$name])) {
                 $result[$name] = (int) $template->ID;
             }
         }
