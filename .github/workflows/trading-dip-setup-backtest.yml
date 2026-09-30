@@ -1,0 +1,68 @@
+name: Trading Dip Setup Backtest
+
+# Read-only diagnostic, manual only. Reads one dip portfolio's rule from the public config,
+# replays it against the published per-tag backtest caches, and prints P/L per tag, shape and
+# league. Places no orders, writes nothing, uses no secrets.
+on:
+  workflow_dispatch:
+    inputs:
+      portfolio:
+        description: "Dip portfolio (display name or id)"
+        required: true
+        default: "dip 70+ -> 45-56 live"
+        type: string
+      tags:
+        description: "Comma-separated tags whose backtest cache to replay the rule on"
+        required: false
+        default: "tennis,esports,counter-strike-2,soccer,sports"
+        type: string
+      open_min:
+        description: "Optional what-if: opening floor instead of the portfolio's, e.g. 0.75"
+        required: false
+        default: ""
+        type: string
+      open_max:
+        description: "Optional what-if: opening ceiling"
+        required: false
+        default: ""
+        type: string
+      buy_min:
+        description: "Optional what-if: buy-band floor"
+        required: false
+        default: ""
+        type: string
+      buy_max:
+        description: "Optional what-if: buy-band ceiling"
+        required: false
+        default: ""
+        type: string
+      excluded_shapes:
+        description: "Optional what-if: comma-separated shapes to exclude instead of the portfolio's"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Replay the portfolio's rule on the published caches
+        working-directory: trading
+        env:
+          DIP_SETUP_PORTFOLIO: ${{ inputs.portfolio }}
+          DIP_SETUP_TAGS: ${{ inputs.tags }}
+          DIP_SETUP_OPEN_MIN: ${{ inputs.open_min }}
+          DIP_SETUP_OPEN_MAX: ${{ inputs.open_max }}
+          DIP_SETUP_BUY_MIN: ${{ inputs.buy_min }}
+          DIP_SETUP_BUY_MAX: ${{ inputs.buy_max }}
+          DIP_SETUP_EXCLUDED_SHAPES: ${{ inputs.excluded_shapes }}
+        run: node tools/dip-setup-backtest.mjs
