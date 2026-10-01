@@ -397,6 +397,91 @@ add_action('wp_loaded', static function (): void {
         }
     }
 
+    // Inspect one explicitly requested order without exposing its customer
+    // data or sending anything. This reconstructs the exact customer-email
+    // path WooCommerce would take from the stored status and language.
+    $order_delivery_audit = ['requested' => false];
+    $order_id = absint($_GET['jamu_order'] ?? 0);
+    if ($order_id > 0 && function_exists('wc_get_order')) {
+        $order_delivery_audit = ['requested' => true, 'order_id' => $order_id];
+        $order = wc_get_order($order_id);
+        if (!$order) {
+            $order_delivery_audit['exists'] = false;
+        } else {
+            $status = (string) $order->get_status();
+            $email_id_by_status = [
+                'on-hold' => 'customer_on_hold_order',
+                'processing' => 'customer_processing_order',
+                'completed' => 'customer_completed_order',
+                'refunded' => 'customer_refunded_order',
+                'failed' => 'customer_failed_order',
+            ];
+            $email_id = $email_id_by_status[$status] ?? '';
+            $email = null;
+            foreach ((array) WC()->mailer()->get_emails() as $candidate) {
+                if (is_object($candidate) && (string) ($candidate->id ?? '') === $email_id) {
+                    $email = $candidate;
+                    break;
+                }
+            }
+            $billing_email = (string) $order->get_billing_email();
+            $order_delivery_audit += [
+                'exists' => true,
+                'status' => $status,
+                'payment_method' => (string) $order->get_payment_method(),
+                'payment_method_title_present' => (string) $order->get_payment_method_title() !== '',
+                'stored_language' => (string) $order->get_meta('_jamu_ml_language', true),
+                'billing_email_present' => $billing_email !== '',
+                'billing_email_valid' => is_email($billing_email) !== false,
+                'expected_customer_email_id' => $email_id,
+                'template_found' => is_object($email),
+                'template_enabled' => is_object($email) && (string) ($email->enabled ?? '') === 'yes',
+                'email_related_meta_keys' => array_values(array_filter(
+                    array_keys($order->get_meta_data() ? array_reduce(
+                        $order->get_meta_data(),
+                        static function (array $keys, object $meta): array {
+                            $keys[(string) $meta->key] = true;
+                            return $keys;
+                        },
+                        []
+                    ) : []),
+                    static fn (string $key): bool => preg_match('/(?:email|jamu)/i', $key) === 1
+                        && !str_contains($key, 'billing_email')
+                )),
+            ];
+            if (is_object($email)) {
+                try {
+                    $email->object = $order;
+                    $recipient = (string) apply_filters(
+                        'woocommerce_email_recipient_' . $email_id,
+                        $billing_email,
+                        $order,
+                        $email
+                    );
+                    $subject = (string) $email->get_subject();
+                    $html = (string) $email->get_content_html();
+                    $order_delivery_audit += [
+                        'recipient_present' => trim($recipient) !== '',
+                        'recipient_matches_billing' => trim($recipient) === trim($billing_email),
+                        'subject_present' => trim($subject) !== '',
+                        'html_bytes' => strlen($html),
+                        'html_detected' => preg_match('/<(?:html|body|table|div|p)\b/i', $html) === 1,
+                        'html_has_raw_qp_artifacts' => preg_match('/=(?:0D|0A|[A-F0-9]{2})/i', $html) === 1,
+                    ];
+                    apply_filters('woocommerce_mail_callback_params', [
+                        $recipient,
+                        $subject,
+                        $html,
+                        ['Content-Type: text/html; charset=UTF-8'],
+                        [],
+                    ]);
+                } catch (Throwable $exception) {
+                    $order_delivery_audit['render_error'] = get_class($exception);
+                }
+            }
+        }
+    }
+
     restore_error_handler();
     $warning_summary = array_values(array_unique(array_map(
         static fn (array $warning): string => implode(':', $warning),
@@ -428,6 +513,7 @@ add_action('wp_loaded', static function (): void {
         'template_encoding_summary' => $template_encoding_summary,
         'yaymail_variant_data' => $yaymail_variant_data,
         'render_probes' => $render_probes,
+        'order_delivery_audit' => $order_delivery_audit,
         'yaymail_variant_calls' => $yaymail_variant_calls,
         'runtime_warning_summary' => $warning_summary,
     ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);

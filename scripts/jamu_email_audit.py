@@ -42,6 +42,7 @@ def main() -> int:
     token = secrets.token_urlsafe(48)
     token_hash = hashlib.sha256(token.encode()).hexdigest()
     run_id = ''.join(ch for ch in os.environ.get('GITHUB_RUN_ID', 'local') if ch.isdigit()) or 'local'
+    order_id = ''.join(ch for ch in os.environ.get('JAMU_AUDIT_ORDER_ID', '4710') if ch.isdigit())
     remote = REMOTE_DIR / f'jamu-email-audit-{run_id}.php'
     local_bridge = Path('/tmp') / remote.name
     local_bridge.write_text(TEMPLATE.read_text(encoding='utf-8').replace('__JAMU_TOKEN_HASH__', token_hash), encoding='utf-8')
@@ -53,7 +54,11 @@ def main() -> int:
             ftp.storbinary(f'STOR {remote}', handle)
         response = requests.get(
             'https://tajemstvijamu.cz/',
-            params={'jamu_bridge': 'email-audit', 'jamu_nonce': run_id},
+            params={
+                'jamu_bridge': 'email-audit',
+                'jamu_nonce': run_id,
+                **({'jamu_order': order_id} if order_id else {}),
+            },
             headers={'X-JAMU-Email-Audit': token, 'Cache-Control': 'no-cache', 'User-Agent': 'JAMU email audit/1.0'},
             timeout=120,
         )
