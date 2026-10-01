@@ -468,6 +468,23 @@ add_action('wp_loaded', static function () use ($presented): void {
                         'html_detected' => preg_match('/<(?:html|body|table|div|p)\b/i', $html) === 1,
                         'html_has_raw_qp_artifacts' => preg_match('/=(?:0D|0A|[A-F0-9]{2})/i', $html) === 1,
                     ];
+                    $mail_filter_trace = [];
+                    $trace_before = static function (array $params) use (&$mail_filter_trace): array {
+                        $mail_filter_trace['before'] = [
+                            'subject_bytes' => strlen((string) ($params[1] ?? '')),
+                            'body_bytes' => strlen((string) ($params[2] ?? '')),
+                        ];
+                        return $params;
+                    };
+                    $trace_after = static function (array $params) use (&$mail_filter_trace): array {
+                        $mail_filter_trace['after'] = [
+                            'subject_bytes' => strlen((string) ($params[1] ?? '')),
+                            'body_bytes' => strlen((string) ($params[2] ?? '')),
+                        ];
+                        return $params;
+                    };
+                    add_filter('woocommerce_mail_callback_params', $trace_before, 998, 1);
+                    add_filter('woocommerce_mail_callback_params', $trace_after, PHP_INT_MAX, 1);
                     $mail_params = apply_filters('woocommerce_mail_callback_params', [
                         $recipient,
                         $subject,
@@ -475,11 +492,14 @@ add_action('wp_loaded', static function () use ($presented): void {
                         ['Content-Type: text/html; charset=UTF-8'],
                         [],
                     ]);
+                    remove_filter('woocommerce_mail_callback_params', $trace_before, 998);
+                    remove_filter('woocommerce_mail_callback_params', $trace_after, PHP_INT_MAX);
                     $final_html = (string) ($mail_params[2] ?? '');
                     $order_delivery_audit += [
                         'final_html_bytes' => strlen($final_html),
                         'final_html_detected' => preg_match('/<(?:html|body|table|div|p)\b/i', $final_html) === 1,
                         'final_html_has_raw_qp_artifacts' => preg_match('/=(?:0D|0A|[A-F0-9]{2})/i', $final_html) === 1,
+                        'mail_filter_trace' => $mail_filter_trace,
                     ];
                 } catch (Throwable $exception) {
                     $order_delivery_audit['render_error'] = get_class($exception);
