@@ -1402,7 +1402,7 @@ const firstPositiveEquitySats = () =>
   (state?.equityHistory || []).find((point) => Number.isFinite(point.equitySats) && point.equitySats > 0)
     ?.equitySats ?? null
 
-const capitalBenchmark = ({ account, market, stats }) => {
+const capitalBenchmark = ({ account, market, stats, pnlDeltaUsd = null }) => {
   const startUsd = Number(state?.settings?.startingCapitalUsd)
   const currentSats = Number(account?.equitySats)
   const currentBtcPrice = Number(market?.price)
@@ -1419,20 +1419,28 @@ const capitalBenchmark = ({ account, market, stats }) => {
     Number.isFinite(startUsd) && startUsd > 0 && Number.isFinite(startSats) && startSats > 0
       ? (startUsd * SATS_PER_BTC) / startSats
       : null
-  const equityUsd =
+  const accountEquityUsd =
     Number.isFinite(currentSats) && Number.isFinite(currentBtcPrice)
       ? (currentSats / SATS_PER_BTC) * currentBtcPrice
       : null
+  const accountDeltaUsd =
+    Number.isFinite(accountEquityUsd) && Number.isFinite(startUsd) && startUsd > 0
+      ? accountEquityUsd - startUsd
+      : null
+  const reconciledDeltaUsd = Number.isFinite(pnlDeltaUsd) ? pnlDeltaUsd : accountDeltaUsd
+  const equityUsd =
+    Number.isFinite(startUsd) && Number.isFinite(reconciledDeltaUsd)
+      ? startUsd + reconciledDeltaUsd
+      : accountEquityUsd
 
   return {
     equityUsd,
+    startingCapitalUsd: Number.isFinite(startUsd) && startUsd > 0 ? startUsd : null,
     usdDelta:
-      Number.isFinite(equityUsd) && Number.isFinite(startUsd) && startUsd > 0
-        ? equityUsd - startUsd
-        : null,
+      Number.isFinite(reconciledDeltaUsd) ? reconciledDeltaUsd : null,
     usdReturnPct:
-      Number.isFinite(equityUsd) && Number.isFinite(startUsd) && startUsd > 0
-        ? ((equityUsd / startUsd) - 1) * 100
+      Number.isFinite(reconciledDeltaUsd) && Number.isFinite(startUsd) && startUsd > 0
+        ? (reconciledDeltaUsd / startUsd) * 100
         : null,
     btcReturnPct:
       Number.isFinite(currentBtcPrice) && Number.isFinite(startBtcPrice) && startBtcPrice > 0
@@ -1446,17 +1454,30 @@ const capitalBenchmark = ({ account, market, stats }) => {
 }
 
 const realizedStatsForTrades = (trades) => {
-  const settled = trades.filter((trade) => Number.isFinite(trade.plSats))
-  const wins = settled.filter((trade) => trade.plSats > 0)
-  const losses = settled.filter((trade) => trade.plSats < 0)
+  const settled = trades
+    .map((trade) => ({ trade, pnlUsd: positionPnlUsd(trade) }))
+    .filter(({ pnlUsd }) => Number.isFinite(pnlUsd))
+  const wins = settled.filter(({ pnlUsd }) => pnlUsd > 0)
+  const losses = settled.filter(({ pnlUsd }) => pnlUsd < 0)
   return {
     trades: settled.length,
     wins: wins.length,
     losses: losses.length,
-    netPnlSats: settled.reduce((sum, trade) => sum + trade.plSats, 0),
+    netPnlSats: settled.reduce((sum, { trade }) => sum + (Number.isFinite(trade.plSats) ? trade.plSats : 0), 0),
+    netPnlUsd: settled.reduce((sum, { pnlUsd }) => sum + pnlUsd, 0),
     winRate: settled.length ? (wins.length / settled.length) * 100 : null,
   }
 }
+
+const sumPnlUsd = (trades) => trades.reduce((sum, trade) => {
+  const pnlUsd = positionPnlUsd(trade)
+  return Number.isFinite(pnlUsd) ? sum + pnlUsd : sum
+}, 0)
+
+const pnlPercent = (pnlUsd, startingCapitalUsd) =>
+  Number.isFinite(pnlUsd) && Number.isFinite(startingCapitalUsd) && startingCapitalUsd > 0
+    ? (pnlUsd / startingCapitalUsd) * 100
+    : null
 
 const renderPortfolioTiles = (box, { strategyId = null } = {}) => {
   const account = state.account || {}
@@ -1467,9 +1488,14 @@ const renderPortfolioTiles = (box, { strategyId = null } = {}) => {
   const stats = strategyId ? realizedStatsForTrades(closed) : accountStats
 
   const btcPrice = market.price
-  // Account value remains account-wide; only the trading statistics below are
-  // scoped to the strategy currently being viewed.
-  const benchmark = capitalBenchmark({ account, market, stats: accountStats })
+  // The capital delta and both P/L tiles use the same visible scope, so their
+  // percentages reconcile even when the dashboard is filtered to PA-1.
+  const realizedPnlUsd = stats.netPnlUsd ?? sumPnlUsd(closed)
+  const unrealizedPnlUsd = sumPnlUsd(running)
+  const pnlDeltaUsd = Number.isFinite(realizedPnlUsd) && Number.isFinite(unrealizedPnlUsd)
+    ? realizedPnlUsd + unrealizedPnlUsd
+    : null
+  const benchmark = capitalBenchmark({ account, market, stats: accountStats, pnlDeltaUsd })
   const equityUsd = benchmark.equityUsd
   const capitalDelta = signedUsd(benchmark.usdDelta)
   const usdReturn = signedPct(benchmark.usdReturnPct)
@@ -1484,7 +1510,8 @@ const renderPortfolioTiles = (box, { strategyId = null } = {}) => {
     return sum + (position.quantityUsd || 0) * SATS_PER_BTC * perUsd
   }, 0)
 
-  const openPl = running.reduce((sum, position) => sum + (position.plSats || 0), 0)
+  const unrealizedReturn = signedPct(pnlPercent(unrealizedPnlUsd, benchmark.startingCapitalUsd))
+  const realizedReturn = signedPct(pnlPercent(realizedPnlUsd, benchmark.startingCapitalUsd))
 
   const biasLabel = { up: 'vzestupný', down: 'sestupný', range: 'do strany' }[market.bias] || '–'
 
@@ -1501,12 +1528,12 @@ const renderPortfolioTiles = (box, { strategyId = null } = {}) => {
       running.length ? usd(usdFromSats(openRisk)) : '$0,00',
       `${running.length} ${running.length === 1 ? 'pozice' : 'pozic'} v trhu`
     ),
-    tile('Nerealizované P/L', signedUsd(usdFromSats(openPl)).text, 'otevřené pozice', signedUsd(usdFromSats(openPl)).className),
+    tile('Nerealizované P/L', signedUsd(unrealizedPnlUsd).text, unrealizedReturn.text, signedUsd(unrealizedPnlUsd).className),
     tile(
       strategyId ? 'Realizované P/L PA-1' : 'Realizované P/L',
-      signedUsd(usdFromSats(stats.netPnlSats)).text,
-      `${stats.trades || 0} obchodů, úspěšnost ${pct(stats.winRate)}`,
-      signedUsd(usdFromSats(stats.netPnlSats)).className
+      signedUsd(realizedPnlUsd).text,
+      realizedReturn.text,
+      signedUsd(realizedPnlUsd).className
     ),
     tile(
       'BTC',
