@@ -2723,10 +2723,18 @@ const priceActionUsdPnl = (position, target, quantityUsd) => {
   return gross - quantityUsd * linearFeeRate(position) * 2
 }
 
+const priceActionNominalOutcome = (position, target, quantityUsd, label) => {
+  const result = signedUsd(priceActionUsdPnl(position, target, quantityUsd))
+  return {
+    ...result,
+    text: `${label} ${result.text}`,
+  }
+}
+
 const priceActionLevelCell = ({ label, position, target, quantityUsd, completed = false }) => {
   if (!Number.isFinite(target)) return el('td', { text: '–' })
   const movePct = ((target - position.entry) / position.entry) * (position.side === 'long' ? 100 : -100)
-  const result = signedUsd(priceActionUsdPnl(position, target, quantityUsd))
+  const result = priceActionNominalOutcome(position, target, quantityUsd, 'max. ztráta')
   return el('td', {}, [
     el('div', { className: 'pa-level-price', text: `${label} ${quotePrice(target)}` }),
     completed
@@ -2743,16 +2751,26 @@ const priceActionTargetsCell = (position) => {
   const tp2 = Number.isFinite(position.tp2) ? position.tp2 : null
   const contents = []
   if (Number.isFinite(tp1)) {
-    const tp1Pnl = signedUsd(priceActionUsdPnl(position, tp1, position.tp1Taken ? half : Math.min(remaining, half)))
+    const tp1Pnl = priceActionNominalOutcome(
+      position,
+      tp1,
+      position.tp1Taken ? half : Math.min(remaining, half),
+      position.tp1Taken ? 'realizovaný čistý zisk' : 'plánovaný čistý zisk',
+    )
     const tp1Move = ((tp1 - position.entry) / position.entry) * (position.side === 'long' ? 100 : -100)
     contents.push(el('div', { className: 'pa-level-price', text: `TP1 ${quotePrice(tp1)} · 50 %` }))
     contents.push(el('div', {
       className: `pa-level-detail ${tp1Pnl.className}`,
-      text: position.tp1Taken ? 'splněno' : `${signedPct(tp1Move).text} · ${tp1Pnl.text}`,
+      text: position.tp1Taken ? `splněno · ${tp1Pnl.text}` : `${signedPct(tp1Move).text} · ${tp1Pnl.text}`,
     }))
   }
   if (Number.isFinite(tp2)) {
-    const tp2Pnl = signedUsd(priceActionUsdPnl(position, tp2, remaining - (position.tp1Taken ? 0 : half)))
+    const tp2Pnl = priceActionNominalOutcome(
+      position,
+      tp2,
+      remaining - (position.tp1Taken ? 0 : half),
+      'plánovaný čistý zisk',
+    )
     const tp2Move = ((tp2 - position.entry) / position.entry) * (position.side === 'long' ? 100 : -100)
     contents.push(el('div', { className: 'pa-level-price', text: `TP2 ${quotePrice(tp2)} · 50 %` }))
     contents.push(el('div', { className: `pa-level-detail ${tp2Pnl.className}`, text: `${signedPct(tp2Move).text} · ${tp2Pnl.text}` }))
