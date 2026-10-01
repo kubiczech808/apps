@@ -300,19 +300,14 @@ export const planLinearPosition = ({
   const capitalUsd = equitySats / quoteSatsPerUsd
   const leverageCeiling = spot ? 1 : 1 / (stopFraction * config.liquidationSafety)
   const leverage = spot ? 1 : Math.max(1, Math.min(config.maxLeverage, Math.floor(leverageCeiling)))
-  // PA-1 can ask for a capital allocation in addition to the maximum loss.
-  // The allocation is capped before leverage: a 1% allocation on a 100 USD
-  // account always commits about 1 USD, while 3x only turns that margin into
-  // about 3 USD of nominal exposure and leaves the structural stop unchanged.
-  const requestedAllocationPct = Number(config.capitalAllocationPct)
-  const capitalAllocationPct = Number.isFinite(requestedAllocationPct)
-    ? Math.min(100, Math.max(0, requestedAllocationPct))
-    : null
-  const maxNotionalUsd = capitalAllocationPct != null
-    ? capitalUsd * capitalAllocationPct / 100 * leverage
-    : spot
-      ? capitalUsd * Math.min(100, Math.max(0, Number(config.riskPct) || 0)) / 100
-      : capitalUsd * (config.maxNotionalPct / 100)
+  // Risk percentage is the maximum loss at the structural stop, not a cap on
+  // the capital invested. Size the notional from that loss first, then cap it
+  // only by capital actually available after the entry fee.
+  const configuredNotionalUsd = spot
+    ? capitalUsd
+    : capitalUsd * Math.max(0, Number(config.maxNotionalPct) || 0) / 100
+  const affordableNotionalUsd = capitalUsd / (1 / leverage + config.feeRate)
+  const maxNotionalUsd = Math.min(configuredNotionalUsd, affordableNotionalUsd)
   let notionalCapped = false
   if (quantityUsd > maxNotionalUsd) {
     quantityUsd = maxNotionalUsd

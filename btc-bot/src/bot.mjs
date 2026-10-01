@@ -46,6 +46,7 @@ export const roundTarget = (side, price) => (side === 'long' ? ceilPrice(price) 
 
 const PRICE_ACTION_TIMEFRAME_PRIORITY = { '1h': 1, '4h': 2, '1d': 3 }
 export const PRICE_ACTION_POSITION_PROTOCOL = 1
+const PRICE_ACTION_SIZING_MODEL = 'stop-risk-v2'
 
 const priceActionLeverage = (settings) => {
   const candidate = Math.floor(Number(settings?.priceActionStructure?.leverage))
@@ -203,57 +204,6 @@ export const reconcileMissingPriceActionTargets = async ({
   return outcomes
 }
 
-// PA-1 was briefly allowed to turn a narrow structural stop into a large
-// allocation. Correct every oversized paper position once, preserving its
-// structural brackets and any half already closed at TP1. This is deliberately
-// unavailable to live executors: it repairs simulation records only.
-export const reconcileLegacyPriceActionSizing = async ({
-  executor,
-  positions = [],
-  equitySats,
-  btcPrice,
-  settings,
-  dryRun = false,
-} = {}) => {
-  if (typeof executor?.rebasePriceActionPosition !== 'function') return []
-  const outcomes = []
-  const leverage = priceActionLeverage(settings)
-  for (const position of positions.filter((candidate) =>
-    candidate.strategyId === PRICE_ACTION_STRUCTURE_ID &&
-    candidate.pricingModel === 'linear-usd'
-  )) {
-    const plan = planLinearPosition({
-      side: position.side,
-      entry: position.requestedEntry ?? position.entry,
-      stop: position.stopLoss,
-      takeProfit: position.takeProfit,
-      equitySats,
-      btcPrice,
-      settings: {
-        ...(settings?.risk ?? {}),
-        market: leverage === 1 ? 'spot' : 'futures',
-        maxLeverage: leverage,
-        maxNotionalPct: leverage * 100,
-        riskPct: Number(settings?.priceActionStructure?.riskPct) || 1,
-        capitalAllocationPct: Number(settings?.priceActionStructure?.riskPct) || 1,
-        spreadBps: priceActionSpreadBps(settings),
-      },
-    })
-    if (!plan.ok || !(plan.quantityUsd < position.quantityUsd)) continue
-    if (dryRun) {
-      outcomes.push({ position, plan, action: 'would_rebase' })
-      continue
-    }
-    try {
-      const updated = await executor.rebasePriceActionPosition(position.id, plan)
-      if (updated) outcomes.push({ position: updated, plan, action: 'rebased' })
-    } catch (error) {
-      outcomes.push({ position, plan, action: 'rebase_failed', error: error.message })
-    }
-  }
-  return outcomes
-}
-
 export const reconcilePriceActionPartialExits = async ({ executor, dryRun = false } = {}) => {
   if (dryRun || typeof executor?.materializePriceActionPartialExits !== 'function') return []
   return executor.materializePriceActionPartialExits()
@@ -271,14 +221,13 @@ const priceActionOrderPlan = ({ assetSymbol, timeframeId, item, profile, equityS
     btcPrice,
     settings: {
       ...(settings.risk ?? {}),
-      // At 1x this is spot. Above 1x the same capital allocation becomes
-      // margin, so leverage changes nominal exposure without allowing the
-      // committed capital to escape the PA-1 one-percent allocation.
+      // The structural stop determines the nominal size needed to reach the
+      // configured maximum loss. At 1x that is spot capital; higher leverage
+      // changes only the margin required for the same protected exposure.
       market: leverage === 1 ? 'spot' : 'futures',
       maxLeverage: leverage,
       maxNotionalPct: leverage * 100,
       riskPct: Number(profile.riskPct) || Number(settings.priceActionStructure?.riskPct) || 1,
-      capitalAllocationPct: Number(profile.riskPct) || Number(settings.priceActionStructure?.riskPct) || 1,
       spreadBps,
     },
   })
@@ -302,6 +251,7 @@ const priceActionOrderPlan = ({ assetSymbol, timeframeId, item, profile, equityS
       timeframeId,
       strategyId: PRICE_ACTION_STRUCTURE_ID,
       priceActionProtocol: PRICE_ACTION_POSITION_PROTOCOL,
+      sizingModel: PRICE_ACTION_SIZING_MODEL,
       signalKey: priceActionSignalKey({ assetSymbol, timeframeId, profile, settings }),
       signalCandleTime: item.asOf ?? null,
       plan: {
@@ -484,6 +434,20 @@ export const reconcilePendingPriceActionOrders = async ({ executor, orders = [],
   for (const order of orders.filter((candidate) =>
     candidate.strategyId === PRICE_ACTION_STRUCTURE_ID && candidate.orderRole !== 'take-profit'
   )) {
+    if (order.sizingModel !== PRICE_ACTION_SIZING_MODEL) {
+      const reason = 'objednávka používá starý model velikosti; přepočítá se podle rizika na stop-lossu'
+      if (dryRun) {
+        outcomes.push({ order, action: 'would_cancel', reason })
+        continue
+      }
+      try {
+        await executor.cancelOrder(order.id)
+        outcomes.push({ order, action: 'cancelled', reason })
+      } catch (error) {
+        outcomes.push({ order, action: 'cancel_failed', reason, error: error.message })
+      }
+      continue
+    }
     const asset = matrix?.assets?.find((candidate) => candidate.symbol === order.assetSymbol)
     const item = asset?.trends?.[order.timeframeId]
     const profile = priceActionProfileForSignal({
@@ -1075,38 +1039,6 @@ export const runPass = async ({
       }
 
       if (mode === 'paper') {
-        const legacySizingActions = await reconcileLegacyPriceActionSizing({
-          executor,
-          positions: running,
-          equitySats: account.equitySats,
-          btcPrice: price,
-          settings,
-          dryRun: config.dryRun,
-        })
-        for (const action of legacySizingActions) {
-          recordPriceActionEvent(state, {
-            at: isoNow(now),
-            type: action.action === 'rebased' ? 'legacy_position_size_rebased' : 'legacy_position_size_rebase_pending',
-            positionId: action.position.id,
-            asset: action.position.assetSymbol,
-            timeframeId: action.position.timeframeId,
-            side: action.position.side,
-            previousQuantityUsd: action.position.sizeBeforeRebase?.quantityUsd ?? null,
-            quantityUsd: action.position.quantityUsd ?? action.plan?.quantityUsd ?? null,
-            capitalUsd: action.position.capitalUsd ?? action.plan?.capitalUsd ?? null,
-            reason: 'legacy paper position exceeded the spot one-percent capital allocation',
-            fingerprint: [action.position.id, action.action, action.plan?.quantityUsd].join('|'),
-          })
-        }
-        if (legacySizingActions.some((action) => action.action === 'rebased')) {
-          refreshed = await executor.listTrades()
-          trades = refreshed
-          running = refreshed.running
-          closed = capClosed(refreshed.closed)
-          account = await executor.getAccount()
-          state.account = account
-        }
-
         const partialExitRecords = await reconcilePriceActionPartialExits({
           executor,
           dryRun: config.dryRun,

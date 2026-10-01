@@ -229,68 +229,6 @@ test('a paper PA order records bid/ask-adjusted fills and cannot take profit bef
   assert.equal(order.tp1Taken, true)
 })
 
-test('a legacy oversized paper PA position is rebased to the spot capital limit without moving its brackets', async () => {
-  const store = { balanceSats: 1_000_000, trades: [], nextId: 1 }
-  const executor = createPaperExecutor({ store, feeRate: 0.0006, now: () => START })
-  const trade = await executor.openPosition({
-    pricingModel: 'linear-usd', strategyId: 'price-action-structure-v1', assetSymbol: 'USDJPY', timeframeId: '1h',
-    signalKey: 'legacy-size', signalCandleTime: START, side: 'short', entry: 157.425, stop: 157.5975,
-    takeProfit: 156.112, tp1: 156.976, tp2: 156.112, quantityUsd: 104.24, marginSats: 125_570,
-    leverage: 1, liquidation: 314.85, quoteSatsPerUsd: 1_204.623344,
-  })
-  executor.markPriceActionPositions({
-    assets: [{ symbol: 'USDJPY', trends: { '1h': { chartCandles: [
-      candle(START + HOUR, 157.3, 157.4, 156.9, 157.1),
-    ] } } }],
-  })
-  assert.equal(trade.tp1Taken, true)
-  assert.equal(trade.remainingQuantityUsd, 52.12)
-  // Recreate the old persisted form: TP1 had affected the parent's ledger,
-  // but no independently visible closed exit had been stored.
-  const legacyTp1 = trade.partialExits[0]
-  trade.partialExits = []
-  trade.openingFeeSats += legacyTp1.openingFeeSats
-  trade.closingFeeSats += legacyTp1.closingFeeSats
-  trade.realizedPlSats = legacyTp1.plSats + legacyTp1.openingFeeSats
-
-  const updated = await executor.rebasePriceActionPosition(trade.id, {
-    quantityUsd: 1,
-    marginSats: 1_205,
-    quoteSatsPerUsd: 1_204.623344,
-    entry: 157.425,
-    entryFill: 157.4092575,
-    stop: 157.5975,
-    stopFill: 157.61325975,
-    takeProfit: 156.112,
-    takeProfitFill: 156.1276112,
-    capitalUsd: 1.0006,
-    riskUsd: 0.002,
-    spreadBps: 2,
-    leverage: 1,
-    liquidation: 314.818515,
-  })
-
-  assert.equal(updated.quantityUsd, 1)
-  assert.equal(updated.remainingQuantityUsd, 0.5)
-  assert.equal(updated.marginSats, 603)
-  assert.equal(updated.capitalUsd, 1.0006)
-  assert.equal(updated.riskUsd, 0.002)
-  assert.equal(updated.spreadBps, 2)
-  assert.equal(updated.stopLoss, 157.5975)
-  assert.equal(updated.tp1, 156.976)
-  assert.equal(updated.tp2, 156.112)
-  assert.equal(updated.sizeBeforeRebase.quantityUsd, 104.24)
-  assert.ok(Number.isFinite(updated.plSats))
-  const exits = await executor.materializePriceActionPartialExits()
-  assert.equal(exits.length, 1)
-  assert.equal(exits[0].id, `${trade.id}:tp1`)
-  assert.equal(exits[0].quantityUsd, 0.5)
-  assert.equal(exits[0].exitReason, 'take_profit_1')
-  assert.equal(updated.realizedPlSats, 0)
-  assert.equal((await executor.listTrades()).closed.filter((candidate) => candidate.parentTradeId === trade.id).length, 1)
-  assert.deepEqual(await executor.materializePriceActionPartialExits(), [], 'the legacy repair must remain idempotent')
-})
-
 const stubClient = (overrides = {}) => ({
   network: 'testnet4',
   getAccount: async () => ({ balance: 100_000, username: 'tester' }),

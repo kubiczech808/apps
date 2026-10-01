@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { applyCommands, executeReadyPriceActionProfiles, placePendingPriceActionOrders, PRICE_ACTION_POSITION_PROTOCOL, readConfig, reconcileBrackets, reconcileLegacyPriceActionSizing, reconcileMissingPriceActionTargets, reconcilePendingPriceActionOrders, reconcilePriceActionInvalidations, reconcilePriceActionPartialExits, roundStop, roundTarget, runPass, strategyIdForPosition } from '../src/bot.mjs'
+import { applyCommands, executeReadyPriceActionProfiles, placePendingPriceActionOrders, PRICE_ACTION_POSITION_PROTOCOL, readConfig, reconcileBrackets, reconcileMissingPriceActionTargets, reconcilePendingPriceActionOrders, reconcilePriceActionInvalidations, reconcilePriceActionPartialExits, roundStop, roundTarget, runPass, strategyIdForPosition } from '../src/bot.mjs'
 import { LEGACY_PRICE_ACTION_ID, PRICE_ACTION_STRUCTURE_ID } from '../src/strategy-registry.mjs'
 import { appendCandle, START, zigzag } from './helpers.mjs'
 
@@ -166,8 +166,8 @@ test('ready PA profiles open one paper trade per asset and never duplicate the s
   assert.equal(calls[0].timeframeId, '1h')
   assert.equal(calls[0].market, 'spot')
   assert.equal(calls[0].leverage, 1)
-  assert.ok(calls[0].capitalUsd <= 8.01, `spot capital ${calls[0].capitalUsd} must be capped at 1% of 800 USD equity`)
-  assert.ok(calls[0].riskUsd < 8, `structural stop risk ${calls[0].riskUsd} must remain under the one-percent ceiling`)
+  assert.ok(calls[0].capitalUsd > 600 && calls[0].capitalUsd <= 800, `spot capital ${calls[0].capitalUsd} should size the structural stop to the 1% risk target`)
+  assert.ok(calls[0].riskUsd > 7.9 && calls[0].riskUsd <= 8, `structural stop risk ${calls[0].riskUsd} must use the one-percent ceiling`)
   assert.equal(calls[0].spreadBps, 2)
   assert.deepEqual(calls[0].entryZone, profile.zone)
   assert.deepEqual(calls[0].tp2Zone, profile.tp2Zone)
@@ -381,31 +381,24 @@ test('changing the PA leverage replaces a pending spot instruction without chang
   assert.notEqual(leveragedOrder.signalKey, spotOrder.signalKey)
 })
 
-test('a legacy one-times spot PA position is rebased rather than left at its old risk-sized notional', async () => {
-  const calls = []
-  const position = {
-    id: 'legacy-usdjpy', strategyId: 'price-action-structure-v1', pricingModel: 'linear-usd', leverage: 1,
-    side: 'short', entry: 157.425, stopLoss: 157.5975, takeProfit: 156.112,
-    quantityUsd: 104.24, capitalUsd: 69.55,
+test('a pending PA order using the former capital-allocation model is replaced before entry', async () => {
+  const cancellations = []
+  const executor = { cancelOrder: async (id) => cancellations.push(id) }
+  const order = {
+    id: 'old-sizing-order',
+    strategyId: PRICE_ACTION_STRUCTURE_ID,
+    orderRole: 'entry',
+    assetSymbol: 'AUDUSD',
+    timeframeId: '1h',
+    side: 'long',
+    sizingModel: 'capital-allocation-v1',
   }
-  const outcomes = await reconcileLegacyPriceActionSizing({
-    executor: {
-      rebasePriceActionPosition: async (id, plan) => {
-        calls.push({ id, plan })
-        return { ...position, ...plan, id, capitalUsd: plan.capitalUsd }
-      },
-    },
-    positions: [position],
-    equitySats: 100_000,
-    btcPrice: 100_000,
-    settings: { risk: { feeRate: 0.0006, minMarginSats: 1 }, priceActionStructure: { riskPct: 1, leverage: 1, spreadBps: 2 } },
-  })
 
-  assert.equal(outcomes[0].action, 'rebased')
-  assert.equal(calls[0].id, 'legacy-usdjpy')
-  assert.equal(calls[0].plan.quantityUsd, 1)
-  assert.ok(calls[0].plan.capitalUsd < 1.01)
-  assert.equal(calls[0].plan.stop, 157.5975)
+  const outcomes = await reconcilePendingPriceActionOrders({ executor, orders: [order] })
+
+  assert.equal(outcomes[0].action, 'cancelled')
+  assert.match(outcomes[0].reason, /starý model velikosti/)
+  assert.deepEqual(cancellations, ['old-sizing-order'])
 })
 
 test('a previously booked PA TP1 is materialized as one closed exit leg', async () => {

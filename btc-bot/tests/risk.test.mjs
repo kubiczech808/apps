@@ -40,7 +40,7 @@ test('an unleveraged linear FX trade never commits more capital than is availabl
   assert.ok(plan.riskSats < 1_230, 'the capital cap may reduce risk without moving the stop')
 })
 
-test('spot PA-1 commits only its one-percent capital budget and keeps a structural stop', () => {
+test('spot PA-1 uses available capital to target one-percent loss at its structural stop', () => {
   const plan = planLinearPosition({
     side: 'long',
     entry: 0.7131,
@@ -53,14 +53,14 @@ test('spot PA-1 commits only its one-percent capital budget and keeps a structur
   })
 
   assert.equal(plan.ok, true, plan.reason)
-  assert.equal(plan.quantityUsd, 1)
-  assert.ok(plan.capitalUsd > 1 && plan.capitalUsd < 1.01, `capital ${plan.capitalUsd}`)
-  assert.ok(plan.riskUsd < 1, `stop risk ${plan.riskUsd}`)
+  assert.ok(plan.quantityUsd > 80 && plan.quantityUsd <= 100, `notional ${plan.quantityUsd}`)
+  assert.ok(plan.capitalUsd > 80 && plan.capitalUsd <= 100, `capital ${plan.capitalUsd}`)
+  assert.ok(plan.riskUsd > 0.99 && plan.riskUsd <= 1, `stop risk ${plan.riskUsd}`)
   assert.equal(plan.stop, 0.706, 'the structural stop must not be moved to force one dollar of risk')
   assert.equal(plan.spreadBps, 2)
 })
 
-test('a leveraged PA allocation keeps the same one-percent margin budget', () => {
+test('leverage preserves the one-percent stop risk while reducing required margin', () => {
   const plan = planLinearPosition({
     side: 'long',
     entry: 80_000,
@@ -76,9 +76,9 @@ test('a leveraged PA allocation keeps the same one-percent margin budget', () =>
 
   assert.equal(plan.ok, true, plan.reason)
   assert.equal(plan.leverage, 3)
-  assert.ok(plan.quantityUsd <= 3.01, `nominal ${plan.quantityUsd}`)
-  assert.ok(plan.capitalUsd > 1 && plan.capitalUsd < 1.01, `capital ${plan.capitalUsd}`)
-  assert.ok(plan.riskUsd < 0.1, `risk ${plan.riskUsd}`)
+  assert.ok(plan.quantityUsd > 45 && plan.quantityUsd < 50, `nominal ${plan.quantityUsd}`)
+  assert.ok(plan.capitalUsd > 15 && plan.capitalUsd < 17, `capital ${plan.capitalUsd}`)
+  assert.ok(plan.riskUsd > 0.99 && plan.riskUsd <= 1, `risk ${plan.riskUsd}`)
   assert.equal(plan.stop, 78_400, 'leverage must not move the structural stop')
 })
 
