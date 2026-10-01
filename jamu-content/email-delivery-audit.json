@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-10-01T18:43:20+00:00",
+  "generated_at": "2026-10-01T18:45:01+00:00",
   "plugins": [
     {
       "file": "ecomail/ecomail.php",
@@ -6834,7 +6834,12 @@
     "matching_delayed_email_actions": []
   },
   "test_delivery": {
-    "requested": false
+    "requested": true,
+    "recipient_valid": true,
+    "order_id": 4710,
+    "ready": true,
+    "mail_layer_accepted": true,
+    "mail_layer_reported": true
   },
   "yaymail_variant_calls": [
     {
@@ -7016,6 +7021,11 @@
       "template_name": "customer_verify_email",
       "selected_variant": "",
       "email_id": "customer_verify_email"
+    },
+    {
+      "template_name": "customer_on_hold_order",
+      "selected_variant": "",
+      "email_id": ""
     },
     {
       "template_name": "customer_on_hold_order",
