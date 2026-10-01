@@ -63,6 +63,12 @@ test('the hidden attribute outranks every layout rule in the stylesheet', () => 
   assert.ok(override, 'app.css must contain [hidden] { display: none !important }')
 })
 
+test('the desktop workspace uses the available width for dense trade tables', () => {
+  assert.match(css, /\.wrap\s*\{[\s\S]*width:\s*100%[\s\S]*max-width:\s*none/)
+  assert.match(css, /@media \(min-width:\s*1100px\)[\s\S]*#panel-open table,[\s\S]*table-layout:\s*fixed/)
+  assert.match(css, /#panel-open th,[\s\S]*overflow-wrap:\s*anywhere/)
+})
+
 test('every element the script hides exists in the page', () => {
   // A typo in an id makes `$( ... ).hidden = true` throw on null, which stops
   // the rest of the handler silently — the same symptom from a different cause.

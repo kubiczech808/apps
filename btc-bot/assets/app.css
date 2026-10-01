@@ -93,7 +93,14 @@ body {
  * it back. */
 [hidden] { display: none !important; }
 
-.wrap { max-width: 1180px; margin: 0 auto; padding: 20px 16px 64px; }
+/* The workspace is data-dense. Use the available desktop width rather than
+ * constraining the tables to an editorial-style column. */
+.wrap {
+  width: 100%;
+  max-width: none;
+  margin: 0 auto;
+  padding: 20px clamp(16px, 2vw, 40px) 64px;
+}
 
 /* ── header ─────────────────────────────────────────────────────────────── */
 
@@ -370,6 +377,29 @@ tbody tr:hover { background: var(--series-1-soft); }
 .side-short { color: var(--critical); font-weight: 600; }
 .empty { padding: 24px 10px; color: var(--text-muted); text-align: center; }
 .reason { white-space: normal; color: var(--text-secondary); max-width: 460px; }
+
+/* The price-action position tables can have fourteen columns. On a desktop,
+ * give every column a stable share of the now full-width workspace and allow
+ * supporting details to wrap inside their own cell. Small screens retain the
+ * regular horizontal-scroll fallback below. */
+@media (min-width: 1100px) {
+  #panel-open table,
+  #panel-orders table,
+  #panel-closed table {
+    table-layout: fixed;
+  }
+
+  #panel-open th,
+  #panel-open td,
+  #panel-orders th,
+  #panel-orders td,
+  #panel-closed th,
+  #panel-closed td {
+    padding-inline: 6px;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+}
 
 @media (max-width: 700px) {
   .asset-chart-head { display: block; }
