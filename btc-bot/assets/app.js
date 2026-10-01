@@ -1487,7 +1487,6 @@ const renderPortfolioTiles = (box, { strategyId = null } = {}) => {
   const closed = (state.positions?.closed || []).filter((trade) => !strategyId || trade.strategyId === strategyId)
   const stats = strategyId ? realizedStatsForTrades(closed) : accountStats
 
-  const btcPrice = market.price
   // The capital delta and both P/L tiles use the same visible scope, so their
   // percentages reconcile even when the dashboard is filtered to PA-1.
   const realizedPnlUsd = stats.netPnlUsd ?? sumPnlUsd(closed)
@@ -1513,8 +1512,6 @@ const renderPortfolioTiles = (box, { strategyId = null } = {}) => {
   const unrealizedReturn = signedPct(pnlPercent(unrealizedPnlUsd, benchmark.startingCapitalUsd))
   const realizedReturn = signedPct(pnlPercent(realizedPnlUsd, benchmark.startingCapitalUsd))
 
-  const biasLabel = { up: 'vzestupný', down: 'sestupný', range: 'do strany' }[market.bias] || '–'
-
   box.append(
     tile('Kapitál', usd(equityUsd), capitalChange),
     tile(
@@ -1535,11 +1532,6 @@ const renderPortfolioTiles = (box, { strategyId = null } = {}) => {
       realizedReturn.text,
       signedUsd(realizedPnlUsd).className
     ),
-    tile(
-      'BTC',
-      price(btcPrice),
-      `trend ${biasLabel}${Number.isFinite(market.atrPct) ? `, ATR ${pct(market.atrPct, 2)}` : ''}`
-    )
   )
 }
 
