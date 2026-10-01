@@ -17,8 +17,6 @@ jobs:
     env:
       JAMU_FTP_LOGIN: ${{ secrets.JAMU_FTP_LOGIN }}
       JAMU_FTP_PWD: ${{ secrets.JAMU_FTP_PWD }}
-      # One user-authorized diagnostic delivery; removed immediately after its run.
-      JAMU_TEST_EMAIL_RECIPIENT: ej.akub@seznam.cz
     steps:
       - uses: actions/checkout@v4
         with:
