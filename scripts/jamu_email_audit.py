@@ -43,6 +43,7 @@ def main() -> int:
     token_hash = hashlib.sha256(token.encode()).hexdigest()
     run_id = ''.join(ch for ch in os.environ.get('GITHUB_RUN_ID', 'local') if ch.isdigit()) or 'local'
     order_id = ''.join(ch for ch in os.environ.get('JAMU_AUDIT_ORDER_ID', '4710') if ch.isdigit())
+    test_recipient = os.environ.get('JAMU_TEST_EMAIL_RECIPIENT', '').strip()
     remote = REMOTE_DIR / f'jamu-email-audit-{run_id}.php'
     local_bridge = Path('/tmp') / remote.name
     local_bridge.write_text(TEMPLATE.read_text(encoding='utf-8').replace('__JAMU_TOKEN_HASH__', token_hash), encoding='utf-8')
@@ -58,6 +59,10 @@ def main() -> int:
                 'jamu_bridge': 'email-audit',
                 'jamu_nonce': run_id,
                 **({'jamu_order': order_id} if order_id else {}),
+                **(
+                    {'jamu_test_email': '1', 'jamu_test_recipient': test_recipient}
+                    if test_recipient else {}
+                ),
             },
             headers={'X-JAMU-Email-Audit': token, 'Cache-Control': 'no-cache', 'User-Agent': 'JAMU email audit/1.0'},
             timeout=120,

@@ -11,7 +11,7 @@ if ($presented === '' || !hash_equals('__JAMU_TOKEN_HASH__', hash('sha256', $pre
     return;
 }
 
-add_action('wp_loaded', static function (): void {
+add_action('wp_loaded', static function () use ($presented): void {
     if (($_GET['jamu_bridge'] ?? '') !== 'email-audit') {
         return;
     }
@@ -468,16 +468,102 @@ add_action('wp_loaded', static function (): void {
                         'html_detected' => preg_match('/<(?:html|body|table|div|p)\b/i', $html) === 1,
                         'html_has_raw_qp_artifacts' => preg_match('/=(?:0D|0A|[A-F0-9]{2})/i', $html) === 1,
                     ];
-                    apply_filters('woocommerce_mail_callback_params', [
+                    $mail_params = apply_filters('woocommerce_mail_callback_params', [
                         $recipient,
                         $subject,
                         $html,
                         ['Content-Type: text/html; charset=UTF-8'],
                         [],
                     ]);
+                    $final_html = (string) ($mail_params[2] ?? '');
+                    $order_delivery_audit += [
+                        'final_html_bytes' => strlen($final_html),
+                        'final_html_detected' => preg_match('/<(?:html|body|table|div|p)\b/i', $final_html) === 1,
+                        'final_html_has_raw_qp_artifacts' => preg_match('/=(?:0D|0A|[A-F0-9]{2})/i', $final_html) === 1,
+                    ];
                 } catch (Throwable $exception) {
                     $order_delivery_audit['render_error'] = get_class($exception);
                 }
+            }
+
+            if (function_exists('as_get_scheduled_actions')) {
+                $queue = [];
+                foreach (['pending', 'in-progress', 'failed', 'complete'] as $action_status) {
+                    $actions = as_get_scheduled_actions([
+                        'hook' => 'woocommerce_delayed_transactional_email',
+                        'status' => $action_status,
+                        'per_page' => 100,
+                    ]);
+                    foreach (is_array($actions) ? $actions : [] as $action) {
+                        $args = is_object($action) && method_exists($action, 'get_args') ? $action->get_args() : [];
+                        if (in_array($order_id, is_array($args) ? $args : [], true)
+                            || in_array((string) $order_id, is_array($args) ? $args : [], true)
+                        ) {
+                            $queue[] = [
+                                'status' => $action_status,
+                                'hook' => 'woocommerce_delayed_transactional_email',
+                            ];
+                        }
+                    }
+                }
+                $order_delivery_audit['matching_delayed_email_actions'] = $queue;
+            }
+        }
+    }
+
+    // An explicitly authorized, single diagnostic delivery. This uses the
+    // exact customer template that the audited order would receive, redirects
+    // only this one send to the supplied test inbox, and never edits the order.
+    $test_delivery = ['requested' => false];
+    $test_recipient = sanitize_email((string) ($_GET['jamu_test_recipient'] ?? ''));
+    $test_requested = ($_GET['jamu_test_email'] ?? '') === '1'
+        && $test_recipient !== ''
+        && is_email($test_recipient) !== false;
+    if ($test_requested && $order_id > 0 && function_exists('wc_get_order')) {
+        $test_delivery = [
+            'requested' => true,
+            'recipient_valid' => true,
+            'order_id' => $order_id,
+        ];
+        $order = wc_get_order($order_id);
+        $status = $order ? (string) $order->get_status() : '';
+        $email_id_by_status = [
+            'on-hold' => 'customer_on_hold_order',
+            'processing' => 'customer_processing_order',
+            'completed' => 'customer_completed_order',
+            'refunded' => 'customer_refunded_order',
+            'failed' => 'customer_failed_order',
+        ];
+        $email_id = $email_id_by_status[$status] ?? '';
+        $email = null;
+        foreach ((array) WC()->mailer()->get_emails() as $candidate) {
+            if (is_object($candidate) && (string) ($candidate->id ?? '') === $email_id) {
+                $email = $candidate;
+                break;
+            }
+        }
+        if (!$order || !is_object($email) || (string) ($email->enabled ?? '') !== 'yes') {
+            $test_delivery['ready'] = false;
+        } else {
+            $test_delivery['ready'] = true;
+            $sent_event = null;
+            $recipient_filter = static fn (string $recipient): string => $test_recipient;
+            $sent_listener = static function (mixed $result, mixed $id) use (&$sent_event, $email_id): void {
+                if ((string) $id === $email_id) {
+                    $sent_event = (bool) $result;
+                }
+            };
+            add_filter('woocommerce_email_recipient_' . $email_id, $recipient_filter, PHP_INT_MAX, 1);
+            add_action('woocommerce_email_sent', $sent_listener, PHP_INT_MAX, 3);
+            try {
+                $email->trigger($order_id);
+                $test_delivery['mail_layer_accepted'] = $sent_event === true;
+                $test_delivery['mail_layer_reported'] = $sent_event !== null;
+            } catch (Throwable $exception) {
+                $test_delivery['send_error'] = get_class($exception);
+            } finally {
+                remove_filter('woocommerce_email_recipient_' . $email_id, $recipient_filter, PHP_INT_MAX);
+                remove_action('woocommerce_email_sent', $sent_listener, PHP_INT_MAX);
             }
         }
     }
@@ -514,6 +600,7 @@ add_action('wp_loaded', static function (): void {
         'yaymail_variant_data' => $yaymail_variant_data,
         'render_probes' => $render_probes,
         'order_delivery_audit' => $order_delivery_audit,
+        'test_delivery' => $test_delivery,
         'yaymail_variant_calls' => $yaymail_variant_calls,
         'runtime_warning_summary' => $warning_summary,
     ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
