@@ -1601,6 +1601,109 @@ const attachTradeProfiles = (trends, settings) => {
   }
 }
 
+const sameZoneIdentity = (left, right) =>
+  left?.type === right?.type &&
+  left?.low === right?.low &&
+  left?.high === right?.high &&
+  (left?.firstTime ?? left?.firstIndex ?? null) === (right?.firstTime ?? right?.firstIndex ?? null)
+
+const uniqueZoneSummaries = (zones = []) => zones
+  .filter(Boolean)
+  .filter((zone, index, all) => all.findIndex((candidate) => sameZoneIdentity(candidate, zone)) === index)
+
+const zoneOverlapsPullback = (zone, pullbackRange) => {
+  if (!zone || !pullbackRange || !Number.isFinite(zone.low) || !Number.isFinite(zone.high)) return false
+  const from = Number(pullbackRange.from)
+  const to = Number(pullbackRange.to)
+  return Number.isFinite(from) && Number.isFinite(to) &&
+    zone.low <= Math.max(from, to) && zone.high >= Math.min(from, to)
+}
+
+const nearestZonePastStop = ({ zones, side, stop }) => {
+  if (!Number.isFinite(stop) || (side !== 'long' && side !== 'short')) return null
+  return uniqueZoneSummaries([
+    ...(zones?.unfilledDemand ?? []),
+    ...(zones?.unfilledSupply ?? []),
+  ])
+    .filter((zone) => !zone.filledByOwnTimeframeClose && !zone.invalidatedByOwnTimeframeClose && !Number.isFinite(zone.firstTouchAt))
+    .filter((zone) => side === 'long' ? zone.high < stop : zone.low > stop)
+    .sort((left, right) => {
+      const leftDistance = side === 'long' ? stop - left.high : left.low - stop
+      const rightDistance = side === 'long' ? stop - right.high : right.low - stop
+      return leftDistance - rightDistance
+    })[0] ?? null
+}
+
+// Strategy calculations need the complete FVG catalogue while they build a
+// profile. The persisted dashboard does not: its table and chart show only
+// entry zones in the monitored pullback half, the TP2 context, one level past
+// SL and current-setup audit records. Keeping every historical zone in eight
+// duplicated arrays exceeded the hosting response limit and could make an
+// otherwise valid run disappear from the UI.
+const compactPublishedZones = (item) => {
+  const source = item?.zones
+  if (!source) return
+  const profile = item.tradeProfile ?? {}
+  const side = profile.side ?? profile.directionalSide ?? null
+  const visibleCandidates = (profile.zoneCandidates ?? [])
+    .filter((candidate) => candidate?.directionEligible && candidate?.pullbackEligible)
+  const auditKeys = [
+    'currentSetupDemand', 'currentSetupSupply',
+    'currentSetupInvalidatedDemand', 'currentSetupInvalidatedSupply',
+    'historicalConsumedDemand', 'historicalConsumedSupply',
+  ]
+  const audit = auditKeys.flatMap((key) => source[key] ?? [])
+    .filter((zone) => zoneOverlapsPullback(zone, profile.pullbackRange))
+  const context = [
+    ...visibleCandidates.map((candidate) => candidate.zone),
+    ...visibleCandidates.map((candidate) => candidate.tp2Zone),
+    profile.zone,
+    profile.tp2Zone,
+    profile.entryRefinement?.zone,
+    nearestZonePastStop({ zones: source, side, stop: profile.stop }),
+    ...audit,
+  ]
+  const selected = uniqueZoneSummaries(context)
+  const summaries = selected.map(auditZoneSummary)
+  const byType = (type) => summaries.filter((zone) => zone.type === type)
+  const unfilledByType = (type) => byType(type)
+    .filter((zone) => !zone.filledByOwnTimeframeClose && !zone.invalidatedByOwnTimeframeClose)
+  const newest = (zones) => [...zones]
+    .sort((left, right) => (right.lastIndex ?? -1) - (left.lastIndex ?? -1))[0] ?? null
+  const nearby = (zones) => [...zones]
+    .sort((left, right) => Math.abs(left.distancePct ?? Infinity) - Math.abs(right.distancePct ?? Infinity))
+  const auditByKey = (key) => uniqueZoneSummaries((source[key] ?? [])
+    .filter((zone) => zoneOverlapsPullback(zone, profile.pullbackRange)))
+    .map(auditZoneSummary)
+
+  item.zones = {
+    allDemand: byType('demand'),
+    allSupply: byType('supply'),
+    currentSetupDemand: auditByKey('currentSetupDemand'),
+    currentSetupSupply: auditByKey('currentSetupSupply'),
+    currentSetupInvalidatedDemand: auditByKey('currentSetupInvalidatedDemand'),
+    currentSetupInvalidatedSupply: auditByKey('currentSetupInvalidatedSupply'),
+    historicalConsumedDemand: auditByKey('historicalConsumedDemand'),
+    historicalConsumedSupply: auditByKey('historicalConsumedSupply'),
+    demand: newest(unfilledByType('demand')),
+    supply: newest(unfilledByType('supply')),
+    latestValidDemand: newest(unfilledByType('demand')),
+    latestValidSupply: newest(unfilledByType('supply')),
+    unfilledDemand: unfilledByType('demand'),
+    unfilledSupply: unfilledByType('supply'),
+    nearbyDemand: nearby(unfilledByType('demand')),
+    nearbySupply: nearby(unfilledByType('supply')),
+    unfilledCount: source.unfilledCount,
+    validCount: source.validCount,
+    auditCount: source.auditCount,
+    rule: source.rule,
+  }
+}
+
+const compactPublishedTrendZones = (trends) => {
+  for (const timeframe of PRICE_ACTION_TIMEFRAMES) compactPublishedZones(trends[timeframe.id])
+}
+
 const latestCounterSwingInChart = ({ item, trend, activeRange }) => {
   const anchor = trend === 'down' ? activeRange?.low : activeRange?.high
   const kind = trend === 'down' ? 'high' : 'low'
@@ -2543,6 +2646,7 @@ export const buildPriceActionMatrix = async ({
     // of the retired local swing classifier and must not alter an external
     // source's timeframe conclusion.
     attachTradeProfiles(trends, merged)
+    compactPublishedTrendZones(trends)
     rows.push({
       symbol: asset.symbol,
       name: asset.name,

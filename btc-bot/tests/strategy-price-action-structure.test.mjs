@@ -775,6 +775,7 @@ test('a successful Twelve Data batch keeps every FX chart populated when public 
   })
 
   assert.equal('hourly' in matrix.externalTrends, false, 'the large fallback payload must not be published twice')
+  assert.ok(Buffer.byteLength(JSON.stringify(matrix)) < 6_000_000, 'the published matrix must stay below the hosting payload limit')
   for (const asset of matrix.assets.filter((item) => item.group === 'fx')) {
     assert.match(asset.source, /Twelve Data/, `${asset.symbol} must use the successful external OHLC fallback`)
     for (const timeframe of PRICE_ACTION_TIMEFRAMES) {
