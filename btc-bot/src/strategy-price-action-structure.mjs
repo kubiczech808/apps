@@ -102,14 +102,22 @@ export const aggregateHourlyTimeframeCandles = ({ candles, timeframeId, allowFxS
 // A provider rate limit is different: retrying the same seven-symbol request
 // each minute turns one 429 into 420 unnecessary hourly credits. Keep that
 // outcome only until the next completed hourly bucket.
-export const canReuseExternalTrendReference = ({ previous, hourBucket, apiKey }) => {
+export const canReuseExternalTrendReference = ({ previous, hourBucket, apiKey, now = null }) => {
   if (previous?.hourBucket !== hourBucket) return false
   if (previous?.pivotSchemaVersion !== EXTERNAL_PIVOT_SCHEMA) return false
   if (!apiKey) return true
-  return !previous.failures?.some((failure) => {
+  const keyMissing = previous.failures?.some((failure) => {
     const message = String(failure)
     return message.includes('TWELVE_DATA_API_KEY není nastaven')
   })
+  if (keyMissing) return false
+  const rateLimited = previous.failures?.some((failure) => String(failure).includes('Twelve Data HTTP 429'))
+  if (!rateLimited) return true
+  const retryAfter = Date.parse(previous.retryAfter ?? '')
+  // Older cached 429 records predate the bounded retry field. Refresh those
+  // immediately once so a historical transient limit cannot pin FX to flat.
+  if (!Number.isFinite(retryAfter)) return !Number.isFinite(now)
+  return !Number.isFinite(now) || now < retryAfter
 }
 
 const LOWER_TIMEFRAME = {
@@ -2408,6 +2416,7 @@ export const canReusePriceActionMatrix = ({
     previous: matrix.externalTrends,
     hourBucket: Math.floor(now / (60 * 60_000)),
     apiKey: twelveDataApiKey,
+    now,
   })
 }
 
@@ -2445,6 +2454,7 @@ export const buildPriceActionMatrix = async ({
           previous: previous?.externalTrends,
           hourBucket: externalTrendHour,
           apiKey: twelveDataApiKey,
+          now,
         })
       ? previous.externalTrends
       : await buildExternalTrendReference({

@@ -843,6 +843,10 @@ export const buildExternalTrendReference = async ({
     pivotSchemaVersion: EXTERNAL_PIVOT_SCHEMA,
     generatedAt: new Date(now).toISOString(),
     hourBucket: Math.floor(now / HOUR_MS),
+    // A rate-limited batch is retried once after a short cooldown. Waiting
+    // the whole hour leaves otherwise healthy FX charts and pivots stale long
+    // after a transient provider throttle has recovered.
+    retryAfter: fxUnavailable ? new Date(now + 5 * 60_000).toISOString() : null,
     method: EXTERNAL_TREND_METHOD,
     // This live-only OHLC payload lets the price-action matrix use the same
     // successful Twelve Data request when a public chart mirror is throttled.

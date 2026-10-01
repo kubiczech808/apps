@@ -509,6 +509,18 @@ test('an available Twelve Data key immediately replaces a cached missing-key res
 
   const rateLimited = { hourBucket: 100, pivotSchemaVersion: EXTERNAL_PIVOT_SCHEMA, failures: ['Twelve Data: Twelve Data HTTP 429'] }
   assert.equal(canReuseExternalTrendReference({ previous: rateLimited, hourBucket: 100, apiKey: 'new-key' }), true)
+  assert.equal(canReuseExternalTrendReference({
+    previous: { ...rateLimited, retryAfter: new Date(START + 5 * 60_000).toISOString() },
+    hourBucket: 100,
+    apiKey: 'new-key',
+    now: START + 4 * 60_000,
+  }), true)
+  assert.equal(canReuseExternalTrendReference({
+    previous: { ...rateLimited, retryAfter: new Date(START + 5 * 60_000).toISOString() },
+    hourBucket: 100,
+    apiKey: 'new-key',
+    now: START + 5 * 60_000,
+  }), false)
   assert.equal(canReuseExternalTrendReference({ previous: rateLimited, hourBucket: 101, apiKey: 'new-key' }), false)
   assert.equal(canReuseExternalTrendReference({ previous: { hourBucket: 100, pivotSchemaVersion: EXTERNAL_PIVOT_SCHEMA - 1, failures: [] }, hourBucket: 100, apiKey: 'new-key' }), false)
 })
