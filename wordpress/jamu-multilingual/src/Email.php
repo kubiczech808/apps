@@ -288,9 +288,14 @@ final class Email
         if ($this->context_depth > 0) {
             foreach ([1, 2] as $index) {
                 if (isset($params[$index]) && is_string($params[$index]) && $params[$index] !== '') {
-                    $params[$index] = $this->translate_email_text(
-                        $index === 2 ? $this->decode_quoted_printable_html($params[$index]) : $params[$index]
-                    );
+                    $original = $params[$index];
+                    $text = $index === 2 ? $this->decode_quoted_printable_html($original) : $original;
+                    $translated = $this->translate_email_text($text);
+
+                    // A malformed third-party template must never make the message
+                    // disappear. Keep the successfully decoded source as a safe
+                    // fallback when a content transformation cannot produce text.
+                    $params[$index] = $translated !== '' ? $translated : $text;
                 }
             }
         }
@@ -507,7 +512,9 @@ final class Email
         }
 
         $decoded = quoted_printable_decode($body);
-        if ($decoded === $body || !preg_match('/<(?:html|body|table|div|p)\b/i', $decoded)) {
+        if ($decoded === $body
+            || !preg_match('/<(?:html|body|table|div|p)\b/i', $decoded)
+            || !preg_match('//u', $decoded)) {
             return $body;
         }
 
@@ -734,7 +741,10 @@ final class Email
         }
         $text = strtr($text, $this->email_exact_replacements($language));
         foreach ($this->email_regex_replacements($language) as $pattern => $replacement) {
-            $text = (string) preg_replace($pattern, $replacement, $text);
+            $replaced = preg_replace($pattern, $replacement, $text);
+            if (is_string($replaced)) {
+                $text = $replaced;
+            }
         }
         return $text;
     }

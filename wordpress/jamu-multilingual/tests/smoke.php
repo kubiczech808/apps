@@ -190,6 +190,28 @@ if (!str_contains((string) $mail_params[2], 'Vielen Dank')) {
     throw new RuntimeException('Customer email body was not localized.');
 }
 
+// YayMail may hand WooCommerce a quoted-printable HTML document. It must stay
+// non-empty through the mail callback and be decoded before PHPMailer receives it.
+$quoted_printable_recipient = apply_filters(
+    'woocommerce_email_recipient_customer_on_hold_order',
+    'ci@example.invalid',
+    $email_order,
+    $customer_on_hold
+);
+$quoted_printable_params = apply_filters('woocommerce_mail_callback_params', [
+    'ci@example.invalid',
+    $subject,
+    quoted_printable_encode('<html><body><p>Děkuji Vám za objednávku.</p></body></html>'),
+    ['Content-Type: text/html'],
+    [],
+]);
+if ($quoted_printable_recipient !== 'ci@example.invalid'
+    || (string) $quoted_printable_params[2] === ''
+    || !str_contains((string) $quoted_printable_params[2], '<html>')
+    || str_contains((string) $quoted_printable_params[2], '=0A')) {
+    throw new RuntimeException('Quoted-printable customer email HTML was damaged in the mail callback.');
+}
+
 $customer_email_cases = [
     'en' => [
         'subject' => 'Your order from',
