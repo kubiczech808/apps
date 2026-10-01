@@ -7443,8 +7443,8 @@ function switchCreatePortfolioType(type) {
  */
 // Every parameter of a paper portfolio, ready to be handed to the live create form.
 //
-// Asked for: try "55+ underway" in production without retyping fifteen fields. So this is
-// a copy, and the three fields that must NOT be copied are the point of it:
+// A copied portfolio keeps every rule, but never starts executing until its owner explicitly
+// switches it on. The account-specific bookkeeping below must not cross the paper/live boundary.
 //
 //   automationEnabled  false, always. A live portfolio that starts trading the moment it
 //                      is created is not a copy, it is a live order. It goes on when the
@@ -7456,13 +7456,21 @@ function switchCreatePortfolioType(type) {
 //
 // stakeUsdc DOES carry over: paper and live both size from it, and a copy that quietly
 // traded a different stake would not be the thing that was measured.
-function livePrefillFromPaperPortfolio(config, displayName) {
+function portfolioCopyPrefill(config, displayName) {
   const {
     initialUsdc, archived, custom, automationEnabled,
     fixedEntryPrice, fixedEntryPriceHistory, stakePerOrderUsdc,
     ...carried
   } = config || {};
   return { ...carried, displayName, automationEnabled: false };
+}
+
+function livePrefillFromPaperPortfolio(config, displayName) {
+  return portfolioCopyPrefill(config, displayName);
+}
+
+function paperPrefillFromLivePortfolio(config, displayName) {
+  return portfolioCopyPrefill(config, displayName);
 }
 
 function openCreatePortfolioModal(prefill = {}, trigger = null, accountType = "paper") {
@@ -12669,9 +12677,9 @@ function automationBadgeMarkup() {
 // no longer does. An archived portfolio's holdings stay watched and its expired orders
 // still get withdrawn; only opening new bids stops. So "Live 72-82" showed an edit icon and
 // nothing beside it, which is the report. A portfolio being CREATED gets neither icon: it
-// does not exist yet. Copy-to-live is offered on paper portfolios only -- a live one is
-// already live, and there is nothing to copy it into.
-function renderPortfolioRulesCard(title, rows, archiveStrategyId = null, copyToLiveStrategyId = null) {
+// does not exist yet. Paper can become a switched-off live copy, and live can become a
+// switched-off paper experiment without retyping its rules.
+function renderPortfolioRulesCard(title, rows, archiveStrategyId = null, copyToLiveStrategyId = null, copyToPaperStrategyId = null) {
   return `
     <div class="portfolio-rules-card">
       <div class="portfolio-rules-head">
@@ -12685,6 +12693,14 @@ function renderPortfolioRulesCard(title, rows, archiveStrategyId = null, copyToL
         </button>
         ${copyToLiveStrategyId ? `
           <button class="portfolio-rules-copy-live" type="button" data-portfolio-copy-to-live="${escapeHtml(copyToLiveStrategyId)}" aria-label="Copy to a live portfolio" title="Create a live portfolio with these exact parameters, switched off.">
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <rect x="9" y="9" width="12" height="12" rx="2"></rect>
+              <path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"></path>
+            </svg>
+          </button>
+        ` : ""}
+        ${copyToPaperStrategyId ? `
+          <button class="portfolio-rules-copy-live" type="button" data-portfolio-copy-to-paper="${escapeHtml(copyToPaperStrategyId)}" aria-label="Copy to a paper portfolio" title="Create a paper portfolio with these exact parameters, switched off.">
             <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
               <rect x="9" y="9" width="12" height="12" rx="2"></rect>
               <path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"></path>
@@ -13853,7 +13869,7 @@ function renderLiveState(liveState) {
   if (els.portfolioRules) {
     els.portfolioRules.innerHTML = `
     <div class="bot-summary">
-      ${renderPortfolioRulesCard(`${portfolioNameForMode()} portfolio`, livePortfolioRuleRows(), state.mode)}
+      ${renderPortfolioRulesCard(`${portfolioNameForMode()} portfolio`, livePortfolioRuleRows(), state.mode, null, state.mode)}
     </div>
   `;
   }
@@ -18377,6 +18393,24 @@ document.addEventListener("click", (event) => {
       livePrefillFromPaperPortfolio(source, `${sourceName} live`),
       copyToLiveButton,
       "live",
+    );
+    setParameterModalStatus(
+      `Copied every parameter from "${sourceName}". Automation is OFF -- save to create it.`,
+    );
+    return;
+  }
+
+  const copyToPaperButton = event.target.closest("[data-portfolio-copy-to-paper]");
+  if (copyToPaperButton) {
+    event.preventDefault();
+    const strategyId = copyToPaperButton.dataset.portfolioCopyToPaper || "";
+    if (!strategyId || !isLivePortfolioMode(strategyId)) return;
+    const source = portfolioConfigForMode(strategyId);
+    const sourceName = portfolioNameForMode(strategyId, source);
+    openCreatePortfolioModal(
+      paperPrefillFromLivePortfolio(source, `${sourceName} paper`),
+      copyToPaperButton,
+      "paper",
     );
     setParameterModalStatus(
       `Copied every parameter from "${sourceName}". Automation is OFF -- save to create it.`,

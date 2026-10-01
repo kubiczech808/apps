@@ -1174,17 +1174,15 @@ test("archiving: a direct control sits next to the edit icon, on every portfolio
   // beside the other two, and its modal footer button could never have worked.
   assert.match(card, /copyToLiveStrategyId \? `[\s\S]*?data-portfolio-copy-to-live="\$\{escapeHtml\(copyToLiveStrategyId\)\}"[\s\S]*?` : ""/);
 
-  // Paper passes its own id for both: it can be archived, and it is the only kind with
-  // anything to copy into a live portfolio.
+  // Paper passes its own id for both: it can be archived and copied to a live experiment.
   assert.match(APP, /renderPortfolioRulesCard\(portfolioState\.label \|\| "Paper portfolio", portfolioRuleRows\(\{ \.\.\.portfolioState, \.\.\.portfolio \}\), portfolioState\.id, portfolioState\.id\)/,
     "the paper card passes its own strategy id for archiving and for copying");
   // Reported: "Live 72-82" showed the edit icon with nothing beside it. The base live
   // portfolio used to be excluded here on the grounds that archiving would leave the wallet
   // unwatched -- which stopped being true once an archived portfolio's holdings stayed on
-  // the exit worker's watch. Every live portfolio gets the icon; none gets copy-to-live,
-  // because a live portfolio is already live.
-  assert.match(APP, /renderPortfolioRulesCard\(`\$\{portfolioNameForMode\(\)\} portfolio`, livePortfolioRuleRows\(\), state\.mode\)/,
-    "the live card offers archiving for every live portfolio, the base one included");
+  // the exit worker's watch. Every live portfolio gets archive and copy-to-paper controls.
+  assert.match(APP, /renderPortfolioRulesCard\(`\$\{portfolioNameForMode\(\)\} portfolio`, livePortfolioRuleRows\(\), state\.mode, null, state\.mode\)/,
+    "the live card offers archiving and copying to paper for every live portfolio, the base one included");
 
   const handler = /const directArchiveButton = event\.target\.closest\("\[data-portfolio-archive-direct\]"\);[\s\S]*?\n  \}/.exec(APP);
   assert.ok(handler, "the direct archive control is wired");
@@ -5312,7 +5310,7 @@ test("archiving: the base live portfolio is reachable and leaves a mode it can r
 
   // And the archive icon is offered for it. The live card used to pass null for the base
   // live portfolio, so it rendered no control at all beside the edit icon.
-  assert.match(APP, /renderPortfolioRulesCard\(`\$\{portfolioNameForMode\(\)\} portfolio`, livePortfolioRuleRows\(\), state\.mode\)/);
+  assert.match(APP, /renderPortfolioRulesCard\(`\$\{portfolioNameForMode\(\)\} portfolio`, livePortfolioRuleRows\(\), state\.mode, null, state\.mode\)/);
   // The confirmation's label lookup used to treat anything without a live-custom- prefix
   // as paper, so "live" would have been looked up as "paper-live" and named wrongly.
   assert.match(APP, /strategyId === "live" \|\| strategyId === "live-5050"/);
@@ -5344,9 +5342,11 @@ test("archiving: every archivable portfolio can be restored, base live included"
 // Asked for: try a winning paper portfolio in production on one click -- a live portfolio
 // with the same parameters, switched off. The value is in what does NOT get copied.
 test("copy to live: every parameter carries over except the three that must not", () => {
-  const prefill = new Function("normalizePortfolioAccountType", `
+  const prefills = new Function("normalizePortfolioAccountType", `
+    ${extractFunction(APP, "portfolioCopyPrefill")}
     ${extractFunction(APP, "livePrefillFromPaperPortfolio")}
-    return livePrefillFromPaperPortfolio;
+    ${extractFunction(APP, "paperPrefillFromLivePortfolio")}
+    return { livePrefillFromPaperPortfolio, paperPrefillFromLivePortfolio };
   `)((value) => value);
 
   // "55+ underway" as it actually stands, plus the paper-only fields.
@@ -5368,7 +5368,7 @@ test("copy to live: every parameter carries over except the three that must not"
     automationEnabled: true,
     custom: true,
   };
-  const copied = prefill(paper, "55+ underway live");
+  const copied = prefills.livePrefillFromPaperPortfolio(paper, "55+ underway live");
 
   // Automation off is the whole safety property: a copy that starts trading on creation is
   // not a copy, it is a live order.
@@ -5388,9 +5388,23 @@ test("copy to live: every parameter carries over except the three that must not"
   })) assert.deepEqual(copied[key], value, `${key} has to survive the copy`);
   assert.deepEqual(copied.excludedMarketShapes, ["exact-score"]);
   assert.equal(copied.displayName, "55+ underway live");
+
+  // The reverse route is the test workflow: preserve the live rules, but reset both the
+  // account-specific amount and automation before creating paper capital.
+  const paperCopy = prefills.paperPrefillFromLivePortfolio({
+    ...paper,
+    initialUsdc: 250,
+    displayName: "74-82 live",
+  }, "74-82 live paper");
+  assert.equal(paperCopy.displayName, "74-82 live paper");
+  assert.equal(paperCopy.automationEnabled, false);
+  assert.ok(!("initialUsdc" in paperCopy));
+  assert.equal(paperCopy.minProbability, 0.55);
+  assert.equal(paperCopy.stopLossRiskMultiplier, 0.25);
+  assert.deepEqual(paperCopy.excludedMarketShapes, ["exact-score"]);
 });
 
-test("copy to live: the control is offered only where it means something, and creates live", () => {
+test("portfolio copies: each existing type offers the safe opposite-type copy", () => {
   // The opener has to be able to start as live at all; it was hardcoded to paper.
   assert.match(APP, /function openCreatePortfolioModal\(prefill = \{\}, trigger = null, accountType = "paper"\)/);
   assert.match(APP, /const strategyId = type === "live" \? newLivePortfolioId\(label\) : newPaperPortfolioId\(label\)/);
@@ -5398,21 +5412,27 @@ test("copy to live: the control is offered only where it means something, and cr
   // and diversification rules, not by refusing to create another configuration.
   assert.doesNotMatch(APP, /live portfolio limit reached|CUSTOM_LIVE_PORTFOLIO_LIMIT|canCreateLivePortfolio/);
 
-  // Offered for an existing paper portfolio only: a live one is already live, and one being
-  // created does not exist yet. The card renders the icon only when an id is passed, and
-  // only the paper card passes one.
+  // The card renders each copy icon only when it has an existing strategy id. Paper can be
+  // copied to live, and live can be copied back into a safe paper experiment.
   const card = extractFunction(APP, "renderPortfolioRulesCard");
   assert.match(card, /copyToLiveStrategyId \? `[\s\S]*?data-portfolio-copy-to-live=/);
+  assert.match(card, /copyToPaperStrategyId \? `[\s\S]*?data-portfolio-copy-to-paper=/);
   assert.match(APP, /portfolioRuleRows\(\{ \.\.\.portfolioState, \.\.\.portfolio \}\), portfolioState\.id, portfolioState\.id\)/);
-  assert.match(APP, /renderPortfolioRulesCard\(`\$\{portfolioNameForMode\(\)\} portfolio`, livePortfolioRuleRows\(\), state\.mode\)/,
-    "a live portfolio has nothing to copy into a live portfolio");
+  assert.match(APP, /renderPortfolioRulesCard\(`\$\{portfolioNameForMode\(\)\} portfolio`, livePortfolioRuleRows\(\), state\.mode, null, state\.mode\)/,
+    "a live portfolio can be copied to a paper experiment");
 
   // The handler passes "live" through, or it would silently create another paper portfolio.
-  const handler = /const copyToLiveButton = event\.target\.closest\("\[data-portfolio-copy-to-live\]"\);[\s\S]*?\n    return;\n  \}/.exec(APP);
+  const handler = /const copyToLiveButton = event\.target\.closest\("\[data-portfolio-copy-to-live\]"\);[\s\S]*?\r?\n    return;\r?\n  \}/.exec(APP);
   assert.ok(handler, "the copy-to-live click handler is missing");
   assert.match(handler[0], /openCreatePortfolioModal\(\s*livePrefillFromPaperPortfolio\([\s\S]*?"live",\s*\)/);
   // And it says what happened, because "automation is off" is the thing to know.
   assert.match(handler[0], /Automation is OFF -- save to create it/);
+
+  const reverseHandler = /const copyToPaperButton = event\.target\.closest\("\[data-portfolio-copy-to-paper\]"\);[\s\S]*?\r?\n    return;\r?\n  \}/.exec(APP);
+  assert.ok(reverseHandler, "the copy-to-paper click handler is missing");
+  assert.match(reverseHandler[0], /isLivePortfolioMode\(strategyId\)/);
+  assert.match(reverseHandler[0], /openCreatePortfolioModal\(\s*paperPrefillFromLivePortfolio\([\s\S]*?"paper",\s*\)/);
+  assert.match(reverseHandler[0], /Automation is OFF -- save to create it/);
 
   // Asked for: both controls belong on the card beside the edit icon. In the modal footer
   // they were unreachable -- the modal's click branch returns before anything wired below
