@@ -765,15 +765,18 @@ export const buildExternalTrendReference = async ({
   const hourly = {}
   const failures = []
   const fxAssets = assets.filter((asset) => asset.group === 'fx')
+  let fxUnavailable = false
   if (apiKey) {
     try {
       Object.assign(hourly, await fetchTwelveDataFxHourly({ assets: fxAssets, apiKey, fetchImpl }))
     } catch (error) {
       failures.push(`Twelve Data: ${error.message}`)
+      fxUnavailable = true
       logger?.warn?.(`External FX trend reference failed: ${error.message}`)
     }
   } else {
     failures.push('Twelve Data: TWELVE_DATA_API_KEY není nastaven')
+    fxUnavailable = true
   }
 
   const btc = assets.find((asset) => asset.symbol === 'BTCUSD')
@@ -797,6 +800,25 @@ export const buildExternalTrendReference = async ({
     now,
   })
 
+  // Twelve Data can temporarily reject a valid batch after an hourly refresh.
+  // The candle/structure matrix must not turn every FX row into a false flat
+  // chart in that case. Preserve the last confirmed external reference as
+  // explicitly stale until the next successful hourly source refresh.
+  if (fxUnavailable && previous?.pivots?.assets) {
+    for (const asset of fxAssets) {
+      for (const timeframeId of ['1h', '4h', '1d']) {
+        const previousPivot = previous.pivots.assets?.[asset.symbol]?.[timeframeId]
+        if (!pivots.assets?.[asset.symbol]?.[timeframeId] && previousPivot) {
+          pivots.assets[asset.symbol][timeframeId] = {
+            ...previousPivot,
+            stale: true,
+            staleReason: failures.find((failure) => failure.startsWith('Twelve Data:')) ?? null,
+          }
+        }
+      }
+    }
+  }
+
   const rows = {}
   for (const asset of assets) {
     const source = asset.group === 'fx' ? 'Twelve Data' : 'Binance BTCUSDT'
@@ -805,9 +827,14 @@ export const buildExternalTrendReference = async ({
       : failures.find((failure) => failure.startsWith('Binance:'))
     rows[asset.symbol] = {}
     for (const timeframeId of ['1h', '4h', '1d']) {
+      const previousResult = asset.group === 'fx' && fxUnavailable
+        ? previous?.assets?.[asset.symbol]?.[timeframeId] ?? null
+        : null
       const result = hourly[asset.symbol]
         ? classifyExternalTrend(forTimeframe(hourly[asset.symbol], timeframeId, now))
-        : { trend: null, method: EXTERNAL_TREND_METHOD, reason: sourceFailure ?? 'zdroj není dostupný', candles: 0, asOf: null }
+        : previousResult
+          ? { ...previousResult, stale: true, staleReason: sourceFailure ?? 'zdroj není dostupný' }
+          : { trend: null, method: EXTERNAL_TREND_METHOD, reason: sourceFailure ?? 'zdroj není dostupný', candles: 0, asOf: null }
       rows[asset.symbol][timeframeId] = { ...result, source }
     }
   }

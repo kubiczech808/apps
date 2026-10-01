@@ -2662,11 +2662,8 @@ const positionCapitalCell = (position) => {
   const openFraction = Number.isFinite(notional) && notional > 0 && Number.isFinite(remainingNotional)
     ? Math.min(1, Math.max(0, remainingNotional / notional))
     : 1
-  const investedValue = originalCapital * openFraction
+  const investedValue = Number.isFinite(originalCapital) ? originalCapital * openFraction : null
   const invested = usd(investedValue)
-  const detail = Number.isFinite(notional) && Math.abs(notional - originalCapital) > 0.01
-    ? `nominál ${usd(notional)}`
-    : null
   const partialExitDetail = openFraction < 0.999
     ? `původně vloženo ${usd(originalCapital)}`
     : null
@@ -2680,11 +2677,36 @@ const positionCapitalCell = (position) => {
     : null
   return el('td', {}, [
     el('div', { text: invested }),
-    detail ? el('div', { className: 'pa-level-detail', text: detail }) : null,
     partialExitDetail ? el('div', { className: 'pa-level-detail', text: partialExitDetail }) : null,
     protection ? el('div', { className: 'pa-level-detail', text: protection }) : null,
     spreadDetail ? el('div', { className: 'pa-level-detail', text: spreadDetail }) : null,
   ])
+}
+
+const positionNotionalCell = (position) => {
+  const nominal = Number(position?.quantityUsd)
+  const remaining = Number(position?.remainingQuantityUsd)
+  const current = Number.isFinite(remaining) ? remaining : nominal
+  const partial = Number.isFinite(nominal) && Number.isFinite(remaining) && remaining < nominal - 0.000001
+  return el('td', {}, [
+    el('div', { text: usd(current) }),
+    partial ? el('div', { className: 'pa-level-detail', text: `původně ${usd(nominal)}` }) : null,
+  ])
+}
+
+const positionMarginLeverageCell = (position) => {
+  const leverage = Number(position?.leverage)
+  const margin = usdFromSats(position?.marginSats, position?.quoteSatsPerUsd)
+  return el('td', {}, [
+    el('div', { text: Number.isFinite(leverage) ? `${leverage}×` : '–' }),
+    el('div', { className: 'pa-level-detail', text: `marže ${usd(margin)}` }),
+  ])
+}
+
+const positionLiquidationCell = (position) => {
+  const leverage = Number(position?.leverage)
+  const isSpot = position?.market === 'spot' || leverage <= 1
+  return el('td', { text: isSpot ? 'bez likvidace' : quotePrice(position?.liquidation) })
 }
 
 const priceActionExecutableExit = (position, target) => {
@@ -2743,23 +2765,26 @@ const priceActionTargetsCell = (position) => {
 
 const renderPriceActionOpen = (body) => {
   setPanelTitle('panel-open-title', 'Otevřené price-action obchody')
-  setTableHead('panel-open', ['Otevřeno', 'Asset', 'TF', 'Směr', 'Vložený kapitál', 'Entry', 'Aktuální cena', 'SL', 'TP1 / TP2', 'P/L'])
+  setTableHead('panel-open', ['P/L', 'Asset', 'TF', 'Směr', 'Vložený kapitál', 'Nominál', 'Páka / marže', 'Likvidace', 'Entry', 'Aktuální cena', 'SL', 'TP1 / TP2', 'Otevřeno'])
   $('flatten').hidden = false
   const rows = (state?.positions?.running || []).filter((position) => position.strategyId === 'price-action-structure-v1')
   body.replaceChildren()
   if (!rows.length) {
-    body.append(emptyRow(10, 'Žádný otevřený price-action trade.'))
+    body.append(emptyRow(13, 'Žádný otevřený price-action trade.'))
     return
   }
   for (const position of rows) {
     const remainingQuantityUsd = position.remainingQuantityUsd ?? position.quantityUsd
     body.append(
       chartRecordRow(position, [
-        el('td', { text: when(position.openedAt ?? position.createdAt) }),
+        positionPnlCell(position),
         el('td', { text: position.assetSymbol || position.asset || '–' }),
         el('td', { text: position.timeframeId || position.timeframe ? (position.timeframeId || position.timeframe).toUpperCase() : '–' }),
         sideCell(position.side),
         positionCapitalCell(position),
+        positionNotionalCell(position),
+        positionMarginLeverageCell(position),
+        positionLiquidationCell(position),
         el('td', {}, [
           el('div', { text: quotePrice(position.entry) }),
           Number.isFinite(position.requestedEntry) && position.requestedEntry !== position.entry
@@ -2769,7 +2794,7 @@ const renderPriceActionOpen = (body) => {
         el('td', { text: quotePrice(priceActionPositionPrice(position)) }),
         priceActionLevelCell({ label: 'SL', position, target: position.stopLoss, quantityUsd: remainingQuantityUsd }),
         priceActionTargetsCell(position),
-        positionPnlCell(position),
+        el('td', { text: when(position.openedAt ?? position.createdAt) }),
       ])
     )
   }
@@ -2812,11 +2837,11 @@ const renderOrders = () => {
 
 const renderPriceActionOrders = (body) => {
   setPanelTitle('panel-orders-title', 'Čekající price-action objednávky')
-  setTableHead('panel-orders', ['Zadáno', 'Asset', 'TF', 'Typ', 'Směr', 'Vložený kapitál', 'Cena', 'Akt. cena / vzdál.', 'Stop loss', 'TP1 / TP2', 'Riziko / spread', ''])
+  setTableHead('panel-orders', ['Asset', 'TF', 'Typ', 'Směr', 'Vložený kapitál', 'Nominál', 'Páka / marže', 'Likvidace', 'Cena', 'Akt. cena / vzdál.', 'Stop loss', 'TP1 / TP2', 'Riziko / spread', 'Zadáno', ''])
   const rows = state?.positions?.orders || []
   body.replaceChildren()
   if (!rows.length) {
-    body.append(emptyRow(12, 'Žádné čekající objednávky.'))
+    body.append(emptyRow(15, 'Žádné čekající objednávky.'))
     return
   }
   for (const order of rows) {
@@ -2825,12 +2850,14 @@ const renderPriceActionOrders = (body) => {
     if (cancel) cancel.onclick = () => queueCommand('cancel', order.id)
     body.append(
       chartRecordRow(order, [
-        el('td', { text: when(order.createdAt ?? order.placedAt) }),
         el('td', { text: order.assetSymbol || order.asset || '–' }),
         el('td', { text: order.timeframeId || order.timeframe ? (order.timeframeId || order.timeframe).toUpperCase() : '–' }),
         el('td', { text: order.type === 'limit' ? 'limit' : 'market' }),
         sideCell(order.side),
         positionCapitalCell(order),
+        positionNotionalCell(order),
+        positionMarginLeverageCell(order),
+        positionLiquidationCell(order),
         el('td', { text: quotePrice(order.quotePrice ?? order.entry) }),
         partialTakeProfit ? el('td', { text: '–' }) : pendingOrderDistanceCell(order),
         el('td', { text: partialTakeProfit ? '–' : quotePrice(order.stopLoss) }),
@@ -2841,6 +2868,7 @@ const renderPriceActionOrders = (body) => {
             ? el('div', { className: 'pa-level-detail', text: `${(order.spreadBps / 100).toLocaleString('cs-CZ', { maximumFractionDigits: 3 })} %` })
             : null,
         ]),
+        el('td', { text: when(order.createdAt ?? order.placedAt) }),
         el('td', { text: partialTakeProfit ? '–' : null }, cancel ? [cancel] : []),
       ])
     )
@@ -2919,27 +2947,30 @@ const renderClosed = () => {
 
 const renderPriceActionClosed = (body) => {
   setPanelTitle('panel-closed-title', 'Zavřené price-action obchody')
-  setTableHead('panel-closed', ['Otevřeno', 'Zavřeno', 'Asset', 'TF', 'Směr', 'Objem', 'Entry', 'Výstup', 'Důvod', 'Poplatky', 'P/L'])
+  setTableHead('panel-closed', ['P/L', 'Asset', 'TF', 'Směr', 'Vložený kapitál', 'Nominál', 'Páka / marže', 'Likvidace', 'Entry', 'Výstup', 'Důvod', 'Poplatky', 'Otevřeno', 'Zavřeno'])
   const rows = (state?.positions?.closed || []).filter((trade) => trade.strategyId === 'price-action-structure-v1')
   body.replaceChildren()
   if (!rows.length) {
-    body.append(emptyRow(11, 'Zatím žádný uzavřený price-action obchod.'))
+    body.append(emptyRow(14, 'Zatím žádný uzavřený price-action obchod.'))
     return
   }
   for (const trade of rows.slice(0, 100)) {
     body.append(
       chartRecordRow(trade, [
-        el('td', { text: when(trade.openedAt ?? trade.createdAt) }),
-        el('td', { text: when(trade.closedAt) }),
+        positionPnlCell(trade),
         el('td', { text: trade.assetSymbol || trade.asset || '–' }),
         el('td', { text: trade.timeframeId?.toUpperCase() ?? trade.timeframe?.toUpperCase() ?? '–' }),
         sideCell(trade.side),
-        el('td', { text: Number.isFinite(trade.quantityUsd) ? `${nf(2).format(trade.quantityUsd)} USD` : '–' }),
+        positionCapitalCell(trade),
+        positionNotionalCell(trade),
+        positionMarginLeverageCell(trade),
+        positionLiquidationCell(trade),
         el('td', { text: quotePrice(trade.entry) }),
         el('td', { text: quotePrice(trade.exitPrice) }),
         exitReasonCell(trade.exitReason),
         el('td', { text: usd(satFeesUsd(trade)) }),
-        positionPnlCell(trade),
+        el('td', { text: when(trade.openedAt ?? trade.createdAt) }),
+        el('td', { text: when(trade.closedAt) }),
       ])
     )
   }

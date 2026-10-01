@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { EXTERNAL_PIVOT_SCHEMA, canReuseExternalPivotBucket, classifyExternalPivotPath, classifyExternalTrend, confirmedExternalPivotCandidates, confirmedExternalPivotPath, fetchTwelveDataFxHourly, fetchTwelveDataFxPivots } from '../src/external-trends.mjs'
+import { EXTERNAL_PIVOT_SCHEMA, buildExternalTrendReference, canReuseExternalPivotBucket, classifyExternalPivotPath, classifyExternalTrend, confirmedExternalPivotCandidates, confirmedExternalPivotPath, fetchTwelveDataFxHourly, fetchTwelveDataFxPivots } from '../src/external-trends.mjs'
 import { PRICE_ACTION_ASSETS, PRICE_ACTION_TIMEFRAMES } from '../src/strategy-price-action-structure.mjs'
 import { HOUR, START } from './helpers.mjs'
 
@@ -39,6 +39,36 @@ test('Twelve Data FX batch is parsed as UTC-normalized hourly candles', async ()
   assert.equal(candles.EURUSD.length, 55)
   assert.equal(candles.EURUSD[0].time, START)
   assert.ok(candles.EURUSD[0].time < candles.EURUSD.at(-1).time)
+})
+
+test('a rate-limited FX refresh preserves the last confirmed source matrix as stale', async () => {
+  const priorTrend = { trend: 'down', source: 'Twelve Data', candles: 240, asOf: START + 200 * HOUR }
+  const priorPivot = {
+    trend: 'down', source: 'Twelve Data', timeframeId: '1h', asOf: START + 200 * HOUR,
+    pivots: [{ kind: 'high', label: 'LH', price: 1.14, time: START + 180 * HOUR }],
+  }
+  const previous = {
+    assets: { EURUSD: { '1h': priorTrend, '4h': priorTrend, '1d': priorTrend } },
+    pivots: {
+      schemaVersion: EXTERNAL_PIVOT_SCHEMA,
+      buckets: { '1h': 1, '4h': 1, '1d': 1 },
+      assets: { EURUSD: { '1h': priorPivot, '4h': priorPivot, '1d': priorPivot } },
+    },
+  }
+  const reference = await buildExternalTrendReference({
+    assets: [{ symbol: 'EURUSD', group: 'fx', twelveSymbol: 'EUR/USD' }],
+    apiKey: 'test-key',
+    previous,
+    now: START + 201 * HOUR,
+    logger: { warn() {} },
+    fetchImpl: async () => ({ ok: false, status: 429 }),
+  })
+
+  assert.equal(reference.assets.EURUSD['1h'].trend, 'down')
+  assert.equal(reference.assets.EURUSD['1h'].stale, true)
+  assert.equal(reference.pivots.assets.EURUSD['1h'].trend, 'down')
+  assert.equal(reference.pivots.assets.EURUSD['1h'].stale, true)
+  assert.match(reference.failures[0], /429/)
 })
 
 test('external trend is a separate EMA regime rather than the PA swing label', () => {

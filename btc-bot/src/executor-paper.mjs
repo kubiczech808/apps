@@ -121,6 +121,7 @@ export const createPaperExecutor = ({
       exitReason: 'take_profit_1',
       source: trade.source,
       pricingModel: trade.pricingModel,
+      market: trade.market,
       assetSymbol: trade.assetSymbol,
       timeframeId: trade.timeframeId,
       strategyId: trade.strategyId,
@@ -420,6 +421,7 @@ export const createPaperExecutor = ({
           signalKey: plan.signalKey,
           signalCandleTime: plan.signalCandleTime ?? null,
           quoteSatsPerUsd: plan.quoteSatsPerUsd,
+          market: plan.market,
           capitalUsd: plan.capitalUsd,
           riskUsd: plan.riskUsd,
           feeRate: plan.feeRate ?? feeRate,
@@ -493,6 +495,7 @@ export const createPaperExecutor = ({
         signalKey: plan.signalKey,
         signalCandleTime: plan.signalCandleTime ?? null,
         quoteSatsPerUsd: plan.quoteSatsPerUsd,
+        market: plan.market,
         capitalUsd: plan.capitalUsd,
         riskUsd: plan.riskUsd,
         feeRate: plan.feeRate ?? feeRate,
@@ -587,6 +590,7 @@ export const createPaperExecutor = ({
       trade.capitalUsd = plan.capitalUsd
       trade.riskUsd = plan.riskUsd
       trade.spreadBps = plan.spreadBps
+      trade.market = plan.market
       trade.leverage = plan.leverage
       trade.liquidation = plan.liquidation
       trade.sizeRebasedAt = now()

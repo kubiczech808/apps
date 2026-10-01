@@ -385,7 +385,8 @@ test('a legacy one-times spot PA position is rebased rather than left at its old
   const calls = []
   const position = {
     id: 'legacy-usdjpy', strategyId: 'price-action-structure-v1', pricingModel: 'linear-usd', leverage: 1,
-    side: 'short', entry: 157.425, stopLoss: 157.5975, takeProfit: 156.112, quantityUsd: 104.24,
+    side: 'short', entry: 157.425, stopLoss: 157.5975, takeProfit: 156.112,
+    quantityUsd: 104.24, capitalUsd: 69.55,
   }
   const outcomes = await reconcileLegacyPriceActionSizing({
     executor: {

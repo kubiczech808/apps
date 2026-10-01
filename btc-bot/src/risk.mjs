@@ -298,18 +298,21 @@ export const planLinearPosition = ({
   let quantityUsd = riskSats / roundTripRiskPerUsd
   const spot = config.market === 'spot'
   const capitalUsd = equitySats / quoteSatsPerUsd
-  // Spot PA-1 budgets the capital committed to a trade at the same percentage
-  // as its risk rule. On a 100 USD account and 1% setting the order can commit
-  // roughly 1 USD, while the structural stop remains untouched and can only
-  // make the realised loss smaller. The separately shown exchange fee is paid
-  // in addition to that committed order amount.
-  //
-  // A futures plan keeps its previous notional cap because its margin is a
-  // separate, explicitly leveraged choice.
-  const spotCapitalPct = Math.min(100, Math.max(0, Number(config.riskPct) || 0))
-  const maxNotionalUsd = spot
-    ? capitalUsd * spotCapitalPct / 100
-    : capitalUsd * (config.maxNotionalPct / 100)
+  const leverageCeiling = spot ? 1 : 1 / (stopFraction * config.liquidationSafety)
+  const leverage = spot ? 1 : Math.max(1, Math.min(config.maxLeverage, Math.floor(leverageCeiling)))
+  // PA-1 can ask for a capital allocation in addition to the maximum loss.
+  // The allocation is capped before leverage: a 1% allocation on a 100 USD
+  // account always commits about 1 USD, while 3x only turns that margin into
+  // about 3 USD of nominal exposure and leaves the structural stop unchanged.
+  const requestedAllocationPct = Number(config.capitalAllocationPct)
+  const capitalAllocationPct = Number.isFinite(requestedAllocationPct)
+    ? Math.min(100, Math.max(0, requestedAllocationPct))
+    : null
+  const maxNotionalUsd = capitalAllocationPct != null
+    ? capitalUsd * capitalAllocationPct / 100 * leverage
+    : spot
+      ? capitalUsd * Math.min(100, Math.max(0, Number(config.riskPct) || 0)) / 100
+      : capitalUsd * (config.maxNotionalPct / 100)
   let notionalCapped = false
   if (quantityUsd > maxNotionalUsd) {
     quantityUsd = maxNotionalUsd
@@ -320,8 +323,6 @@ export const planLinearPosition = ({
     return { ok: false, reason: `position would be ${quantityUsd} USD, below the ${config.minQuantityUsd} USD minimum` }
   }
 
-  const leverageCeiling = spot ? 1 : 1 / (stopFraction * config.liquidationSafety)
-  const leverage = spot ? 1 : Math.max(1, Math.min(config.maxLeverage, Math.floor(leverageCeiling)))
   const marginSats = Math.ceil((quantityUsd / leverage) * quoteSatsPerUsd)
   if (marginSats < config.minMarginSats) {
     return { ok: false, reason: `margin ${marginSats} sats is below the ${config.minMarginSats} sats minimum` }
@@ -353,11 +354,11 @@ export const planLinearPosition = ({
     rr: rewardSats / actualRiskSats,
     rrNetOfFees: (rewardSats - feeSats) / (actualRiskSats + feeSats),
     stopDistancePct: stopFraction,
-    liquidation: roundPrice(side === 'long'
+    liquidation: spot ? null : roundPrice(side === 'long'
       ? entry * (1 - 1 / leverage)
       : entry * (1 + 1 / leverage)),
     quoteSatsPerUsd,
-    capitalUsd: quantityUsd * (1 + config.feeRate),
+    capitalUsd: marginSats / quoteSatsPerUsd + quantityUsd * config.feeRate,
     riskUsd: (actualRiskSats + feeSats) / quoteSatsPerUsd,
     feeRate: config.feeRate,
     spreadBps,

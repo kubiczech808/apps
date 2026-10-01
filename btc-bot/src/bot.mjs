@@ -203,10 +203,10 @@ export const reconcileMissingPriceActionTargets = async ({
   return outcomes
 }
 
-// PA-1 was briefly allowed to turn a narrow structural stop into a large spot
-// allocation. Existing paper positions carry neither the capital fields nor
-// the bid/ask model that new instructions do. Correct them once, preserving
-// their structural brackets and any half already closed at TP1.
+// PA-1 was briefly allowed to turn a narrow structural stop into a large
+// allocation. Correct every oversized paper position once, preserving its
+// structural brackets and any half already closed at TP1. This is deliberately
+// unavailable to live executors: it repairs simulation records only.
 export const reconcileLegacyPriceActionSizing = async ({
   executor,
   positions = [],
@@ -217,11 +217,10 @@ export const reconcileLegacyPriceActionSizing = async ({
 } = {}) => {
   if (typeof executor?.rebasePriceActionPosition !== 'function') return []
   const outcomes = []
+  const leverage = priceActionLeverage(settings)
   for (const position of positions.filter((candidate) =>
     candidate.strategyId === PRICE_ACTION_STRUCTURE_ID &&
-    candidate.pricingModel === 'linear-usd' &&
-    candidate.leverage === 1 &&
-    !Number.isFinite(candidate.capitalUsd)
+    candidate.pricingModel === 'linear-usd'
   )) {
     const plan = planLinearPosition({
       side: position.side,
@@ -232,9 +231,11 @@ export const reconcileLegacyPriceActionSizing = async ({
       btcPrice,
       settings: {
         ...(settings?.risk ?? {}),
-        market: 'spot',
-        maxLeverage: 1,
+        market: leverage === 1 ? 'spot' : 'futures',
+        maxLeverage: leverage,
+        maxNotionalPct: leverage * 100,
         riskPct: Number(settings?.priceActionStructure?.riskPct) || 1,
+        capitalAllocationPct: Number(settings?.priceActionStructure?.riskPct) || 1,
         spreadBps: priceActionSpreadBps(settings),
       },
     })
@@ -270,13 +271,14 @@ const priceActionOrderPlan = ({ assetSymbol, timeframeId, item, profile, equityS
     btcPrice,
     settings: {
       ...(settings.risk ?? {}),
-      // At 1x this is genuine spot: the committed capital cannot exceed the
-      // account. Higher values are an explicit user choice; the stop stays
-      // structural and the plan limits position size instead of moving it.
+      // At 1x this is spot. Above 1x the same capital allocation becomes
+      // margin, so leverage changes nominal exposure without allowing the
+      // committed capital to escape the PA-1 one-percent allocation.
       market: leverage === 1 ? 'spot' : 'futures',
       maxLeverage: leverage,
       maxNotionalPct: leverage * 100,
       riskPct: Number(profile.riskPct) || Number(settings.priceActionStructure?.riskPct) || 1,
+      capitalAllocationPct: Number(profile.riskPct) || Number(settings.priceActionStructure?.riskPct) || 1,
       spreadBps,
     },
   })

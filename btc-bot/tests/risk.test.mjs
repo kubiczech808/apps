@@ -60,6 +60,28 @@ test('spot PA-1 commits only its one-percent capital budget and keeps a structur
   assert.equal(plan.spreadBps, 2)
 })
 
+test('a leveraged PA allocation keeps the same one-percent margin budget', () => {
+  const plan = planLinearPosition({
+    side: 'long',
+    entry: 80_000,
+    stop: 78_400,
+    takeProfit: 84_800,
+    equitySats: 100_000,
+    btcPrice: 100_000,
+    settings: {
+      market: 'futures', maxLeverage: 3, riskPct: 1, capitalAllocationPct: 1,
+      feeRate: 0.0006, spreadBps: 2, minMarginSats: 1,
+    },
+  })
+
+  assert.equal(plan.ok, true, plan.reason)
+  assert.equal(plan.leverage, 3)
+  assert.ok(plan.quantityUsd <= 3.01, `nominal ${plan.quantityUsd}`)
+  assert.ok(plan.capitalUsd > 1 && plan.capitalUsd < 1.01, `capital ${plan.capitalUsd}`)
+  assert.ok(plan.riskUsd < 0.1, `risk ${plan.riskUsd}`)
+  assert.equal(plan.stop, 78_400, 'leverage must not move the structural stop')
+})
+
 test('linear fills use the adverse bid or ask on both sides of a trade', () => {
   const longEntry = effectiveLinearFillPrice({ side: 'long', price: 100, spreadBps: 10, leg: 'entry' })
   const longExit = effectiveLinearFillPrice({ side: 'long', price: 100, spreadBps: 10, leg: 'exit' })
