@@ -35,7 +35,7 @@ test('running backtests expose equally weighted asset and timeframe progress', (
 })
 
 test('legacy period reports never render their completed backtest as zero percent', () => {
-  const match = js.match(/const backtestRunProgress = ([\s\S]*?)\n\nconst backtestValue/)
+  const match = js.match(/const backtestRunProgress = ([\s\S]*?)\r?\n\r?\nconst backtestValue/)
   assert.ok(match, 'dashboard must expose the backtest progress calculator')
   const calculateProgress = new Function(`return (${match[1]})`)()
   const periodAssets = Object.fromEntries([

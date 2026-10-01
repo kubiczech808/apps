@@ -4,7 +4,7 @@ import { buildExternalTrendReference, EXTERNAL_PIVOT_SCHEMA } from './external-t
 import { buildFvgSupplyDemandZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 72
+export const PRICE_ACTION_MATRIX_SCHEMA = 73
 export const PRICE_ACTION_CHART_CANDLE_LIMITS = {
   // The zone and structure inputs below remain much longer. These limits only
   // bound chart data published to the browser, where a 60-day 1H / 180-day
@@ -2337,7 +2337,7 @@ const candlesInHistory = (candles, historyDays) => {
   return candles.filter((candle) => candle.time >= cutoff)
 }
 
-const assetTimeframeCandles = async ({ asset, btcHourly, fetchImpl, now, logger }) => {
+const assetTimeframeCandles = async ({ asset, btcHourly, fxHourlyFallback = null, fetchImpl, now, logger }) => {
   if (asset.symbol === 'BTCUSD') {
     return PRICE_ACTION_TIMEFRAMES.map((timeframe) => ({
       source: 'bot-market',
@@ -2348,7 +2348,7 @@ const assetTimeframeCandles = async ({ asset, btcHourly, fetchImpl, now, logger 
   // Use one FX hourly source for every chart and decision timeframe. Apart
   // from keeping all chart bodies consistent, this avoids mixing a direct
   // daily vendor feed with locally aggregated intraday candles.
-  const { source, candles, failures } = await fetchFxCandles({
+  const primary = await fetchFxCandles({
     asset,
     timeframeId: '1h',
     requiredHistoryDays: PRICE_ACTION_STRUCTURE_PROFILES['1d'].zoneHistoryDays,
@@ -2357,6 +2357,16 @@ const assetTimeframeCandles = async ({ asset, btcHourly, fetchImpl, now, logger 
     now,
     logger,
   })
+  // Yahoo and Stooq are only public chart mirrors. When either throttles or
+  // blocks a request, retain a complete chart from the already-fetched Twelve
+  // Data hourly series rather than publishing an empty Forex market.
+  const fallbackCandles = Array.isArray(fxHourlyFallback?.[asset.symbol])
+    ? fxHourlyFallback[asset.symbol]
+    : []
+  const useExternalFallback = primary.candles.length === 0 && fallbackCandles.length > 0
+  const source = useExternalFallback ? 'Twelve Data' : primary.source
+  const candles = useExternalFallback ? fallbackCandles : primary.candles
+  const failures = primary.failures
   return PRICE_ACTION_TIMEFRAMES.map((timeframe) => ({
     source,
     failures,
@@ -2428,16 +2438,8 @@ export const buildPriceActionMatrix = async ({
     twelveDataApiKey,
   })) return previous
 
-  // Each asset fetch starts independently. Forex then derives every
-  // timeframe from its one hourly stream, instead of fetching conflicting
-  // vendor intervals in parallel.
-  const fetchedAssets = await Promise.all(PRICE_ACTION_ASSETS.map(async (asset) => ({
-    asset,
-    results: await assetTimeframeCandles({ asset, btcHourly, fetchImpl, now, logger }),
-  })))
-
   const externalTrendHour = Math.floor(now / (60 * 60_000))
-  const externalTrends = !externalTrendEnabled
+  const externalReference = !externalTrendEnabled
     ? null
     : canReuseExternalTrendReference({
           previous: previous?.externalTrends,
@@ -2454,6 +2456,29 @@ export const buildPriceActionMatrix = async ({
           previous: previous?.externalTrends ?? null,
         })
 
+  // `hourly` is intentionally transient. Historical chart candles remain in
+  // each timeframe row; publishing a second seven-symbol 5,000-bar copy in
+  // the external reference would needlessly inflate every state response.
+  const fxHourlyFallback = externalReference?.hourly ?? null
+  if (externalReference?.hourly) delete externalReference.hourly
+  const externalTrends = externalReference
+
+  // Each asset fetch starts independently. Forex then derives every
+  // timeframe from one hourly stream, instead of fetching conflicting vendor
+  // intervals. A successful Twelve Data batch also becomes a robust fallback
+  // when public chart mirrors temporarily reject a request.
+  const fetchedAssets = await Promise.all(PRICE_ACTION_ASSETS.map(async (asset) => ({
+    asset,
+    results: await assetTimeframeCandles({
+      asset,
+      btcHourly,
+      fxHourlyFallback,
+      fetchImpl,
+      now,
+      logger,
+    }),
+  })))
+
   const rows = []
   for (const { asset, results } of fetchedAssets) {
     const trends = {}
@@ -2461,11 +2486,23 @@ export const buildPriceActionMatrix = async ({
     const failures = []
     for (const [index, timeframe] of PRICE_ACTION_TIMEFRAMES.entries()) {
       const result = results[index]
+      const cached = previous?.assets?.find((item) => item.symbol === asset.symbol)?.trends?.[timeframe.id] ?? null
+      // A provider outage must never erase a previously usable market from
+      // the dashboard. The cached window is still visibly timestamped by the
+      // matrix generation time and is replaced on the next successful fetch.
+      const usableResult = result.candles.length > 0 || !Array.isArray(cached?.chartCandles) || cached.chartCandles.length === 0
+        ? result
+        : {
+            ...result,
+            source: `${asset.group === 'fx' ? 'cached FX OHLC' : 'cached OHLC'}`,
+            candles: cached.chartCandles,
+            chartCandles: cached.chartCandles,
+          }
       const profile = PRICE_ACTION_STRUCTURE_PROFILES[timeframe.id]
-      const analysisCandles = candlesInHistory(result.candles, profile.historyDays)
-      const zoneCandles = candlesInHistory(result.candles, profile.zoneHistoryDays)
+      const analysisCandles = candlesInHistory(usableResult.candles, profile.historyDays)
+      const zoneCandles = candlesInHistory(usableResult.candles, profile.zoneHistoryDays)
       const chartCandleLimit = PRICE_ACTION_CHART_CANDLE_LIMITS[timeframe.id]
-      const chartCandles = (result.chartCandles ?? result.candles).slice(-chartCandleLimit)
+      const chartCandles = (usableResult.chartCandles ?? usableResult.candles).slice(-chartCandleLimit)
       // An untouched FVG can remain a valid TP level long after the active
       // structure/entry horizon moved on. Its target history is therefore
       // independent from the shorter trend horizon for the same timeframe.
@@ -2475,8 +2512,8 @@ export const buildPriceActionMatrix = async ({
         && requestedZoneMaxAgeCandles !== DEFAULT_PRICE_ACTION_STRUCTURE.zoneMaxAgeCandles
         ? requestedZoneMaxAgeCandles
         : profile.zoneMaxAgeCandles
-      if (result.source) sources.add(result.source)
-      for (const failure of result.failures ?? []) failures.push(`${timeframe.label}: ${failure}`)
+      if (usableResult.source) sources.add(usableResult.source)
+      for (const failure of usableResult.failures ?? []) failures.push(`${timeframe.label}: ${failure}`)
       const externalTrend = externalTrends?.assets?.[asset.symbol]?.[timeframe.id] ?? null
       const externalPivots = externalTrends?.pivots?.assets?.[asset.symbol]?.[timeframe.id] ?? null
       trends[timeframe.id] = classifyExternalStructure({

@@ -721,6 +721,56 @@ test('long FX hourly history uses Yahoo two-year data before the timing-out Stoo
   assert.match(urls[0], /range=2y/)
 })
 
+test('a successful Twelve Data batch keeps every FX chart populated when public mirrors are throttled', async () => {
+  const now = START + 5_200 * HOUR
+  const twelveValues = Array.from({ length: 5_000 }, (_, index) => {
+    const price = 1 + index * 0.00001
+    return {
+      datetime: new Date(now - (4_999 - index) * HOUR).toISOString().replace('T', ' ').replace('.000Z', ''),
+      open: String(price),
+      high: String(price + 0.0002),
+      low: String(price - 0.0002),
+      close: String(price + 0.0001),
+    }
+  }).reverse()
+  const fetchImpl = async (url) => {
+    if (String(url).includes('api.twelvedata.com')) {
+      return {
+        ok: true,
+        json: async () => Object.fromEntries(
+          PRICE_ACTION_ASSETS
+            .filter((asset) => asset.group === 'fx')
+            .map((asset) => [asset.twelveSymbol, { values: twelveValues }])
+        ),
+      }
+    }
+    // Yahoo and Stooq failures reproduce the production incident. Binance is
+    // unrelated here; BTC's supplied hourly data keeps that row independent.
+    return { ok: false, status: 429 }
+  }
+  const btcHourly = Array.from({ length: 300 }, (_, index) =>
+    candle(now - (299 - index) * HOUR, 80_000, 80_100, 79_900, 80_050)
+  )
+
+  const matrix = await buildPriceActionMatrix({
+    btcHourly,
+    fetchImpl,
+    now,
+    settings: { refreshMinutes: 0 },
+    twelveDataApiKey: 'test-key',
+    externalTrendEnabled: true,
+    logger: { warn() {} },
+  })
+
+  assert.equal('hourly' in matrix.externalTrends, false, 'the large fallback payload must not be published twice')
+  for (const asset of matrix.assets.filter((item) => item.group === 'fx')) {
+    assert.match(asset.source, /Twelve Data/, `${asset.symbol} must use the successful external OHLC fallback`)
+    for (const timeframe of PRICE_ACTION_TIMEFRAMES) {
+      assert.ok(asset.trends[timeframe.id].chartCandles.length > 0, `${asset.symbol} ${timeframe.id} chart must not be empty`)
+    }
+  }
+})
+
 test('wick-only extensions are not structural pivots until their candle closes beyond the prior wick', () => {
   const wickOnlyHighBreak = [
     candle(START, 95, 100, 92, 96),

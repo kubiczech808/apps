@@ -844,6 +844,10 @@ export const buildExternalTrendReference = async ({
     generatedAt: new Date(now).toISOString(),
     hourBucket: Math.floor(now / HOUR_MS),
     method: EXTERNAL_TREND_METHOD,
+    // This live-only OHLC payload lets the price-action matrix use the same
+    // successful Twelve Data request when a public chart mirror is throttled.
+    // The caller removes it before publishing the compact trend reference.
+    hourly,
     assets: rows,
     pivots,
     failures: [...failures, ...pivots.failures],
