@@ -14,6 +14,12 @@ test('the dashboard script parses before deployment', () => {
   assert.doesNotThrow(() => new Function(js))
 })
 
+test('dashboard assets have an explicit release version instead of the permanent dev cache key', () => {
+  assert.match(html, /assets\/app\.css\?v=20261001-ui/)
+  assert.match(html, /assets\/app\.js\?v=20261001-ui/)
+  assert.doesNotMatch(html, /\?v=dev/)
+})
+
 test('running backtests expose equally weighted asset and timeframe progress', () => {
   assert.match(js, /const backtestRunProgress = \(document, run\) =>/)
   assert.match(js, /completedProfiles/)
