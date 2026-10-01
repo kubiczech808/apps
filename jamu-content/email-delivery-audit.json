@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-10-01T18:34:35+00:00",
+  "generated_at": "2026-10-01T18:36:20+00:00",
   "plugins": [
     {
       "file": "ecomail/ecomail.php",
@@ -6821,15 +6821,20 @@
     "final_html_bytes": 0,
     "final_html_detected": false,
     "final_html_has_raw_qp_artifacts": false,
+    "mail_filter_trace": {
+      "before": {
+        "subject_bytes": 55,
+        "body_bytes": 51171
+      },
+      "after": {
+        "subject_bytes": 64,
+        "body_bytes": 0
+      }
+    },
     "matching_delayed_email_actions": []
   },
   "test_delivery": {
-    "requested": true,
-    "recipient_valid": true,
-    "order_id": 4710,
-    "ready": true,
-    "mail_layer_accepted": false,
-    "mail_layer_reported": true
+    "requested": false
   },
   "yaymail_variant_calls": [
     {
@@ -7011,11 +7016,6 @@
       "template_name": "customer_verify_email",
       "selected_variant": "",
       "email_id": "customer_verify_email"
-    },
-    {
-      "template_name": "customer_on_hold_order",
-      "selected_variant": "",
-      "email_id": ""
     },
     {
       "template_name": "customer_on_hold_order",
