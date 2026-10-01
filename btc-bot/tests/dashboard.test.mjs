@@ -127,6 +127,8 @@ test('capital and P/L are presented in USD while sats remain internal accounting
   assert.match(js, /const capitalBenchmark/)
   assert.match(js, /startingCapitalUsd/)
   assert.match(js, /firstPositiveEquitySats/)
+  assert.match(js, /usdDelta/)
+  assert.match(js, /nominálně \$\{capitalDelta\.text\} · \$\{usdReturn\.text\} oproti startu/)
   assert.match(js, /tile\(\s*'Výkon od startu'/, 'dashboard must render a start benchmark tile')
   assert.match(js, /const usdFromSats/)
   assert.match(js, /tile\('Kapitál', usd\(equityUsd\)/)

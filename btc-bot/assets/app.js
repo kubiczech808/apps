@@ -1426,6 +1426,10 @@ const capitalBenchmark = ({ account, market, stats }) => {
 
   return {
     equityUsd,
+    usdDelta:
+      Number.isFinite(equityUsd) && Number.isFinite(startUsd) && startUsd > 0
+        ? equityUsd - startUsd
+        : null,
     usdReturnPct:
       Number.isFinite(equityUsd) && Number.isFinite(startUsd) && startUsd > 0
         ? ((equityUsd / startUsd) - 1) * 100
@@ -1467,7 +1471,11 @@ const renderPortfolioTiles = (box, { strategyId = null } = {}) => {
   // scoped to the strategy currently being viewed.
   const benchmark = capitalBenchmark({ account, market, stats: accountStats })
   const equityUsd = benchmark.equityUsd
+  const capitalDelta = signedUsd(benchmark.usdDelta)
   const usdReturn = signedPct(benchmark.usdReturnPct)
+  const capitalChange = Number.isFinite(benchmark.usdDelta) && Number.isFinite(benchmark.usdReturnPct)
+    ? `nominálně ${capitalDelta.text} · ${usdReturn.text} oproti startu`
+    : 'počáteční hodnota není dostupná'
 
   const openRisk = running.reduce((sum, position) => {
     if (!Number.isFinite(position.entry) || !Number.isFinite(position.stopLoss)) return sum
@@ -1481,7 +1489,7 @@ const renderPortfolioTiles = (box, { strategyId = null } = {}) => {
   const biasLabel = { up: 'vzestupný', down: 'sestupný', range: 'do strany' }[market.bias] || '–'
 
   box.append(
-    tile('Kapitál', usd(equityUsd), 'aktuální hodnota účtu'),
+    tile('Kapitál', usd(equityUsd), capitalChange),
     tile(
       'Výkon od startu',
       Number.isFinite(benchmark.usdReturnPct) ? usdReturn.text : '–',
