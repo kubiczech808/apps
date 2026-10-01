@@ -71,8 +71,11 @@ test('the hidden attribute outranks every layout rule in the stylesheet', () => 
 
 test('the desktop workspace uses the available width for dense trade tables', () => {
   assert.match(css, /\.wrap\s*\{[\s\S]*width:\s*100%[\s\S]*max-width:\s*none/)
-  assert.match(css, /@media \(min-width:\s*1100px\)[\s\S]*#panel-open table,[\s\S]*table-layout:\s*fixed/)
+  assert.match(css, /@media \(min-width:\s*1100px\)[\s\S]*#panel-open table\s*\{[\s\S]*table-layout:\s*fixed/)
   assert.match(css, /#panel-open th,[\s\S]*overflow-wrap:\s*anywhere/)
+  assert.match(css, /#panel-open th:nth-child\(3\),[\s\S]*width:\s*3%/)
+  assert.match(css, /#panel-open th:nth-child\(12\),[\s\S]*width:\s*18%/)
+  assert.match(css, /#panel-open \.pa-level-price\s*\{[\s\S]*white-space:\s*nowrap/)
 })
 
 test('every element the script hides exists in the page', () => {

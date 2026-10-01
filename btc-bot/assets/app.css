@@ -378,15 +378,17 @@ tbody tr:hover { background: var(--series-1-soft); }
 .empty { padding: 24px 10px; color: var(--text-muted); text-align: center; }
 .reason { white-space: normal; color: var(--text-secondary); max-width: 460px; }
 
-/* The price-action position tables can have fourteen columns. On a desktop,
- * give every column a stable share of the now full-width workspace and allow
- * supporting details to wrap inside their own cell. Small screens retain the
- * regular horizontal-scroll fallback below. */
+/* The price-action position tables are deliberately asymmetric: a direction
+ * needs little room, while brackets need room for both the price and the USD
+ * outcome. Small screens retain the regular horizontal-scroll fallback. */
 @media (min-width: 1100px) {
-  #panel-open table,
+  #panel-open table {
+    table-layout: fixed;
+  }
+
   #panel-orders table,
   #panel-closed table {
-    table-layout: fixed;
+    table-layout: auto;
   }
 
   #panel-open th,
@@ -398,6 +400,37 @@ tbody tr:hover { background: var(--series-1-soft); }
     padding-inline: 6px;
     white-space: normal;
     overflow-wrap: anywhere;
+  }
+
+  #panel-open th:nth-child(1),
+  #panel-open td:nth-child(1) { width: 6%; }
+  #panel-open th:nth-child(2),
+  #panel-open td:nth-child(2) { width: 6%; }
+  #panel-open th:nth-child(3),
+  #panel-open td:nth-child(3) { width: 3%; }
+  #panel-open th:nth-child(4),
+  #panel-open td:nth-child(4) { width: 5%; }
+  #panel-open th:nth-child(5),
+  #panel-open td:nth-child(5) { width: 10%; }
+  #panel-open th:nth-child(6),
+  #panel-open td:nth-child(6) { width: 5%; }
+  #panel-open th:nth-child(7),
+  #panel-open td:nth-child(7) { width: 7%; }
+  #panel-open th:nth-child(8),
+  #panel-open td:nth-child(8) { width: 7%; }
+  #panel-open th:nth-child(9),
+  #panel-open td:nth-child(9) { width: 7%; }
+  #panel-open th:nth-child(10),
+  #panel-open td:nth-child(10) { width: 8%; }
+  #panel-open th:nth-child(11),
+  #panel-open td:nth-child(11) { width: 10%; }
+  #panel-open th:nth-child(12),
+  #panel-open td:nth-child(12) { width: 18%; }
+  #panel-open th:nth-child(13),
+  #panel-open td:nth-child(13) { width: 8%; }
+
+  #panel-open .pa-level-price {
+    white-space: nowrap;
   }
 }
 
