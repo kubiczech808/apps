@@ -166,6 +166,24 @@ test("portfolio trade analysis: grades the selection at settlement, excludes unf
     "wins at 70/75/80 against a loss at 75 leave 80 as the lowest entry that beat every loss");
 });
 
+test("run log history: opening a paper log loads the retained operational window", () => {
+  const renderer = extractFunction(APP, "renderRunLog");
+  assert.match(renderer, /historyEntry\.page < 0 && !historyEntry\.busy/,
+    "the first tab visit must recognise that retained history has not been loaded");
+  assert.match(renderer, /void loadPortfolioRunLogHistory\(strategyId\);/,
+    "an empty compact snapshot must automatically fetch the portfolio history");
+
+  const loader = extractFunction(APP, "loadPortfolioRunLogHistory");
+  assert.match(loader, /page_size=200/,
+    "the initial compact history page must cover the previous day of frequent runs");
+
+  const manualRun = extractFunction(APP, "triggerOneTimeExecution");
+  assert.match(manualRun, /delete state\.liveExecutionStateFetchedAt\[normalizeMode\(target\)\];/,
+    "a completed manual live run must invalidate the pre-click execution snapshot");
+  assert.match(manualRun, /await ensureLiveExecutionState\(target\);/,
+    "the post-run redraw must wait for the portfolio's newly published execution log");
+});
+
 test("trade analysis: entry probability is broken down by whole percentage point", () => {
   const band = new Function(`${extractFunction(APP, "portfolioAnalysisProbability")}
     ${extractFunction(APP, "portfolioAnalysisProbabilityBand")}

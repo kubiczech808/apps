@@ -10266,7 +10266,12 @@ async function triggerOneTimeExecution(target) {
     if (!workflow.run?.conclusion || workflow.run.conclusion === "success") {
       setExecutionStatus(`${executionTargetLabel(target)} workflow completed`);
     }
+    // A manual live run can finish while its previous execution snapshot is still within
+    // the short cache window. Forget that timestamp before the final redraw so the just
+    // completed MANUAL verdict is fetched and rendered immediately.
+    if (live) delete state.liveExecutionStateFetchedAt[normalizeMode(target)];
     await loadDashboardState();
+    if (live) await ensureLiveExecutionState(target);
   } catch (error) {
     steps = addExecutionStep(steps, "Execution failed", error.message || "workflow failed", "error");
     setExecutionStatus(error.message || "workflow failed", "error");
@@ -10491,7 +10496,9 @@ async function loadPortfolioRunLogHistory(strategyId, { reset = false } = {}) {
   entry.error = "";
   rerenderRunLogInPlace();
   try {
-    const payload = await fetchApiJson(`api.php?action=portfolio-run-log&strategy_id=${encodeURIComponent(strategyId)}&page=${page}&page_size=12`);
+    // The state snapshot carries only a tiny rolling tail. The archive request stays
+    // compact, but its first page needs to cover a full day of frequent runs.
+    const payload = await fetchApiJson(`api.php?action=portfolio-run-log&strategy_id=${encodeURIComponent(strategyId)}&page=${page}&page_size=200`);
     const incoming = Array.isArray(payload.records) ? payload.records : [];
     const known = reset || !Array.isArray(entry.records)
       ? (state.botState?.paperPortfolios?.[strategyId]?.runLog || [])
@@ -16025,6 +16032,12 @@ function renderRunLog() {
   }
   const strategyId = isLiveMode() ? null : paperStrategyIdFromMode();
   const historyEntry = strategyId ? portfolioRunLogHistoryState(strategyId) : null;
+  // The compact dashboard deliberately omits paper run logs. Pull the newest retained
+  // page on the first visit so a healthy portfolio never reads "no runs" just because
+  // its state segment was compacted between browser refreshes.
+  if (strategyId && historyEntry && historyEntry.page < 0 && !historyEntry.busy) {
+    void loadPortfolioRunLogHistory(strategyId);
+  }
   if (els.runLogSummary) {
     const totalKnown = historyEntry?.page >= 0 ? historyEntry.total : allRuns.length;
     els.runLogSummary.textContent = filters.length === 0
