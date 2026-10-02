@@ -296,6 +296,121 @@ test('a closed break of an active terminal extends the down wave before its next
   ])
 })
 
+test('EURUSD-like down continuation reanchors the active wave at its latest confirmed LH', () => {
+  const pivots = [
+    { kind: 'low', price: 1.1200, close: 1.1210, time: START },
+    { kind: 'high', price: 1.1300, close: 1.1290, time: START + HOUR },
+    { kind: 'low', price: 1.1250, close: 1.1260, time: START + 2 * HOUR },
+    { kind: 'high', price: 1.1390, close: 1.1400, time: START + 3 * HOUR },
+    { kind: 'low', price: 1.1200, close: 1.1190, time: START + 4 * HOUR },
+    // A lower high forms after the first bearish break. Its later close below
+    // the terminal low confirms the next active LH -> LL wave.
+    { kind: 'high', price: 1.1310, close: 1.1280, time: START + 5 * HOUR },
+  ]
+  const candles = [
+    { time: START, open: 1.1210, high: 1.1220, low: 1.1200, close: 1.1210 },
+    { time: START + HOUR, open: 1.1290, high: 1.1300, low: 1.1270, close: 1.1290 },
+    { time: START + 2 * HOUR, open: 1.1260, high: 1.1280, low: 1.1250, close: 1.1260 },
+    { time: START + 3 * HOUR, open: 1.1380, high: 1.1390, low: 1.1360, close: 1.1400 },
+    { time: START + 4 * HOUR, open: 1.1220, high: 1.1230, low: 1.1200, close: 1.1190 },
+    { time: START + 5 * HOUR, open: 1.1280, high: 1.1310, low: 1.1260, close: 1.1280 },
+    { time: START + 6 * HOUR, open: 1.1180, high: 1.1200, low: 1.1150, close: 1.1140 },
+  ]
+
+  const path = classifyExternalPivotPath(pivots, { candles })
+
+  assert.equal(path.trend, 'down')
+  assert.deepEqual(
+    [path.activeRange.high.label, path.activeRange.high.price, path.activeRange.high.time],
+    ['LH', 1.1310, START + 5 * HOUR]
+  )
+  assert.deepEqual(
+    [path.activeRange.low.label, path.activeRange.low.price, path.activeRange.low.time],
+    ['LL', 1.1150, START + 6 * HOUR]
+  )
+  assert.deepEqual(path.chartPivots.map((pivot) => pivot.label), ['LH', 'LL'])
+})
+
+test('up continuation reanchors the active wave at its latest confirmed HL', () => {
+  const pivots = [
+    { kind: 'high', price: 120, close: 119, time: START },
+    { kind: 'low', price: 100, close: 101, time: START + HOUR },
+    { kind: 'high', price: 115, close: 114, time: START + 2 * HOUR },
+    { kind: 'low', price: 90, close: 89, time: START + 3 * HOUR },
+    { kind: 'high', price: 116, close: 117, time: START + 4 * HOUR },
+    { kind: 'low', price: 105, close: 106, time: START + 5 * HOUR },
+  ]
+  const candles = [
+    { time: START, open: 119, high: 120, low: 118, close: 119 },
+    { time: START + HOUR, open: 101, high: 102, low: 100, close: 101 },
+    { time: START + 2 * HOUR, open: 114, high: 115, low: 112, close: 114 },
+    { time: START + 3 * HOUR, open: 91, high: 92, low: 90, close: 89 },
+    { time: START + 4 * HOUR, open: 115, high: 116, low: 112, close: 117 },
+    { time: START + 5 * HOUR, open: 106, high: 108, low: 105, close: 106 },
+    { time: START + 6 * HOUR, open: 117, high: 125, low: 116, close: 126 },
+  ]
+
+  const path = classifyExternalPivotPath(pivots, { candles })
+
+  assert.equal(path.trend, 'up')
+  assert.deepEqual(
+    [path.activeRange.low.label, path.activeRange.low.price, path.activeRange.low.time],
+    ['HL', 105, START + 5 * HOUR]
+  )
+  assert.deepEqual(
+    [path.activeRange.high.label, path.activeRange.high.price, path.activeRange.high.time],
+    ['HH', 125, START + 6 * HOUR]
+  )
+  assert.deepEqual(path.chartPivots.map((pivot) => pivot.label), ['HL', 'HH'])
+})
+
+test('continuation anchors use the latest confirmed counter swing for every supported asset and timeframe', () => {
+  const timeframeMs = { '1h': HOUR, '4h': 4 * HOUR, '1d': 24 * HOUR }
+  const baseBySymbol = {
+    BTCUSD: 80000,
+    EURUSD: 1.14,
+    GBPUSD: 1.34,
+    USDJPY: 157,
+    USDCHF: 0.83,
+    USDCAD: 1.4,
+    AUDUSD: 0.71,
+    NZDUSD: 0.57,
+  }
+
+  for (const asset of PRICE_ACTION_ASSETS) {
+    for (const timeframe of PRICE_ACTION_TIMEFRAMES) {
+      const period = timeframeMs[timeframe.id]
+      const base = baseBySymbol[asset.symbol]
+      const scale = base * 0.01
+      const pivots = [
+        { kind: 'low', price: base - scale * 2, close: base - scale * 1.9, time: START },
+        { kind: 'high', price: base - scale, close: base - scale * 1.1, time: START + period },
+        { kind: 'low', price: base - scale * 1.5, close: base - scale * 1.4, time: START + 2 * period },
+        { kind: 'high', price: base, close: base + scale * 0.1, time: START + 3 * period },
+        { kind: 'low', price: base - scale * 2, close: base - scale * 2.1, time: START + 4 * period },
+        { kind: 'high', price: base - scale * 0.8, close: base - scale, time: START + 5 * period },
+      ]
+      const candles = [
+        { time: START, open: base - scale * 1.9, high: base - scale * 1.8, low: base - scale * 2, close: base - scale * 1.9 },
+        { time: START + period, open: base - scale * 1.1, high: base - scale, low: base - scale * 1.3, close: base - scale * 1.1 },
+        { time: START + 2 * period, open: base - scale * 1.4, high: base - scale * 1.2, low: base - scale * 1.5, close: base - scale * 1.4 },
+        { time: START + 3 * period, open: base - scale * 0.1, high: base, low: base - scale * 0.3, close: base + scale * 0.1 },
+        { time: START + 4 * period, open: base - scale * 1.9, high: base - scale * 1.8, low: base - scale * 2, close: base - scale * 2.1 },
+        { time: START + 5 * period, open: base - scale, high: base - scale * 0.8, low: base - scale * 1.3, close: base - scale },
+        { time: START + 6 * period, open: base - scale * 2.1, high: base - scale * 1.9, low: base - scale * 2.5, close: base - scale * 2.6 },
+      ]
+
+      const path = classifyExternalPivotPath(pivots, { candles })
+
+      assert.equal(path.trend, 'down', `${asset.symbol} ${timeframe.id}`)
+      assert.equal(path.activeRange.high.label, 'LH', `${asset.symbol} ${timeframe.id}`)
+      assert.equal(path.activeRange.high.time, START + 5 * period, `${asset.symbol} ${timeframe.id}`)
+      assert.equal(path.activeRange.low.label, 'LL', `${asset.symbol} ${timeframe.id}`)
+      assert.equal(path.activeRange.low.time, START + 6 * period, `${asset.symbol} ${timeframe.id}`)
+    }
+  }
+})
+
 test('a closed break of an active terminal extends the up wave before its next pivot is confirmed', () => {
   const pivots = [
     { kind: 'low', price: 80, close: 81, time: START },

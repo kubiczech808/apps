@@ -15,7 +15,7 @@ export const EXTERNAL_PIVOT_METHOD = 'Potvrzené 10-svíčkové pivoty z extern�
 // Bump this whenever pivot geometry or confirmation changes. Cached external
 // references are executable strategy input, so a same-hour cache must never
 // preserve the old interpretation after such a change.
-export const EXTERNAL_PIVOT_SCHEMA = 7
+export const EXTERNAL_PIVOT_SCHEMA = 8
 export const EXTERNAL_PIVOT_PERIOD = 10
 export const EXTERNAL_PIVOT_FALLBACK_PERIOD = 5
 export const EXTERNAL_PIVOT_OUTPUTSIZE = 2000
@@ -249,21 +249,38 @@ const firstClosingBreak = ({ candles, after, level, direction }) => candles.find
   && (direction === 'down' ? candle.close < level : candle.close > level)
 )) ?? null
 
-const terminalWaveExtreme = ({ candles, after, kind }) => {
-  const candidates = candles.filter((candle) => candle.time >= after)
-  if (!candidates.length) return null
-  const extreme = candidates.reduce((selected, candle) => (
-    kind === 'low'
-      ? candle.low < selected.low ? candle : selected
-      : candle.high > selected.high ? candle : selected
-  ))
+const terminalAtClosingBreak = ({ candle, kind }) => {
+  if (!candle || !Number.isFinite(candle.time) || !Number.isFinite(candle[kind])) return null
   return {
     kind,
     label: kind === 'low' ? 'LL' : 'HH',
-    price: kind === 'low' ? extreme.low : extreme.high,
-    close: extreme.close,
-    time: extreme.time,
+    price: candle[kind],
+    close: candle.close,
+    time: candle.time,
   }
+}
+
+const latestConfirmedCounterPivot = ({ pivots = [], candles = [], range, trend, after, until }) => {
+  const kind = trend === 'down' ? 'high' : trend === 'up' ? 'low' : null
+  const reference = kind === 'high' ? range?.high?.price : range?.low?.price
+  if (!kind || !Number.isFinite(reference)) return null
+  const isDirectionalCounter = (pivot) => (
+    Number.isFinite(pivot?.price)
+    && pivot.time > after
+    && pivot.time < until
+    && (kind === 'high' ? pivot.price < reference : pivot.price > reference)
+  )
+  const published = pivots.filter((pivot) => pivot.kind === kind && isDirectionalCounter(pivot)).at(-1)
+  if (published) return { ...published, label: kind === 'high' ? 'LH' : 'HL' }
+
+  // A narrow five-candle confirmation is used only to advance the active
+  // continuation after its terminal has been broken. The breaking close is
+  // what confirms this counter swing structurally; it cannot turn a wick-only
+  // reaction into an HH/LL or reverse the established trend.
+  const fallback = confirmedPivotCandidates(candles, EXTERNAL_PIVOT_FALLBACK_PERIOD)
+    .filter(isDirectionalCounter)
+    .at(-1)
+  return fallback ? { ...fallback, label: kind === 'high' ? 'LH' : 'HL' } : null
 }
 
 // A confirmed LH -> LL / HL -> HH pair establishes the direction, but the
@@ -272,34 +289,44 @@ const terminalWaveExtreme = ({ candles, after, kind }) => {
 // active LL/HH leaves the Fibonacci leg and pullback level behind the market.
 // Extend only after a close through the old terminal wick; a wick-only sweep
 // stays out, and the opposite endpoint remains protected until a real BoS.
-const extendActiveRangeAtClosedTerminal = ({ range, trend, candles = [] } = {}) => {
+const extendActiveRangeAtClosedTerminal = ({ range, trend, pivots = [], candles = [] } = {}) => {
   if (!range || (trend !== 'up' && trend !== 'down')) return null
-  const terminal = trend === 'down' ? range.low : range.high
-  if (!terminal || !Number.isFinite(terminal.time) || !Number.isFinite(terminal.price)) return null
-  const breakCandle = firstClosingBreak({
-    candles,
-    after: terminal.time,
-    level: terminal.price,
-    direction: trend,
-  })
-  const newTerminal = breakCandle && terminalWaveExtreme({
-    candles,
-    after: breakCandle.time,
-    kind: trend === 'down' ? 'low' : 'high',
-  })
-  if (!breakCandle || !newTerminal) return null
-  const high = trend === 'down'
-    ? { ...range.high }
-    : { ...newTerminal, label: 'HH' }
-  const low = trend === 'down'
-    ? { ...newTerminal, label: 'LL' }
-    : { ...range.low }
-  if (!(high.price > low.price)) return null
-  return {
-    high,
-    low,
-    source: 'external-closed-terminal-extension',
+  let nextRange = { high: { ...range.high }, low: { ...range.low }, source: range.source }
+  let extended = false
+  while (true) {
+    const terminal = trend === 'down' ? nextRange.low : nextRange.high
+    if (!terminal || !Number.isFinite(terminal.time) || !Number.isFinite(terminal.price)) break
+    const breakCandle = firstClosingBreak({
+      candles,
+      after: terminal.time,
+      level: terminal.price,
+      direction: trend,
+    })
+    const newTerminal = breakCandle && terminalAtClosingBreak({
+      candle: breakCandle,
+      kind: trend === 'down' ? 'low' : 'high',
+    })
+    if (!breakCandle || !newTerminal) break
+
+    const counter = latestConfirmedCounterPivot({
+      pivots,
+      candles,
+      range: nextRange,
+      trend,
+      after: terminal.time,
+      until: breakCandle.time,
+    })
+    const high = trend === 'down'
+      ? counter ? { ...counter, label: 'LH' } : { ...nextRange.high }
+      : { ...newTerminal, label: 'HH' }
+    const low = trend === 'down'
+      ? { ...newTerminal, label: 'LL' }
+      : counter ? { ...counter, label: 'HL' } : { ...nextRange.low }
+    if (!(high.price > low.price)) break
+    nextRange = { high, low, source: 'external-closed-terminal-extension' }
+    extended = true
   }
+  return extended ? nextRange : null
 }
 
 // A structural reversal is confirmed only by a candle close through the
@@ -315,7 +342,7 @@ const latestBreakOfStructure = ({ pivots = [], candles = [] } = {}) => {
     // close through an older HL is continuation of the newer structure, not a
     // fresh BoS whose Fibonacci range may reach back several months.
     if (breakCandle && upLegs.some((leg) => leg.end.time > end.time && leg.end.time < breakCandle.time)) continue
-    const low = breakCandle && terminalWaveExtreme({ candles, after: breakCandle.time, kind: 'low' })
+    const low = breakCandle && terminalAtClosingBreak({ candle: breakCandle, kind: 'low' })
     if (breakCandle && low && end.price > low.price) {
       events.push({
         type: 'BOS_DOWN',
@@ -335,7 +362,7 @@ const latestBreakOfStructure = ({ pivots = [], candles = [] } = {}) => {
     const breakCandle = firstClosingBreak({ candles, after: end.time, level: start.price, direction: 'up' })
     // Symmetric rule for a delayed close above an obsolete LH.
     if (breakCandle && downLegs.some((leg) => leg.end.time > end.time && leg.end.time < breakCandle.time)) continue
-    const high = breakCandle && terminalWaveExtreme({ candles, after: breakCandle.time, kind: 'high' })
+    const high = breakCandle && terminalAtClosingBreak({ candle: breakCandle, kind: 'high' })
     if (breakCandle && high && high.price > end.price) {
       events.push({
         type: 'BOS_UP',
@@ -369,9 +396,8 @@ const nextBreakOfStructure = ({ event, candles = [] } = {}) => {
     level: protectedPivot?.price,
     direction: nextTrend,
   })
-  const terminal = breakCandle && terminalWaveExtreme({
-    candles,
-    after: breakCandle.time,
+  const terminal = breakCandle && terminalAtClosingBreak({
+    candle: breakCandle,
     kind: nextTrend === 'down' ? 'low' : 'high',
   })
   if (!breakCandle || !terminal) return null
@@ -480,6 +506,7 @@ export const classifyExternalPivotPath = (pivots = [], { candles = [], candlesAr
   const terminalRange = extendActiveRangeAtClosedTerminal({
     range: confirmedRange,
     trend,
+    pivots: path,
     candles: completedCandles,
   })
   const activeRange = terminalRange ?? confirmedRange

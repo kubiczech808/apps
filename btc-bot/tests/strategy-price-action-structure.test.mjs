@@ -260,6 +260,42 @@ test('a closed-terminal extension reaches the dashboard chart before the next pi
   )
 })
 
+test('the dashboard chart replaces an obsolete BoS HH with the current EURUSD-like LH', () => {
+  const pivots = [
+    { kind: 'low', price: 1.1200, close: 1.1210, time: START },
+    { kind: 'high', price: 1.1300, close: 1.1290, time: START + HOUR },
+    { kind: 'low', price: 1.1250, close: 1.1260, time: START + 2 * HOUR },
+    { kind: 'high', price: 1.1390, close: 1.1400, time: START + 3 * HOUR },
+    { kind: 'low', price: 1.1200, close: 1.1190, time: START + 4 * HOUR },
+    { kind: 'high', price: 1.1310, close: 1.1280, time: START + 5 * HOUR },
+  ]
+  const candles = [
+    candle(START, 1.1210, 1.1220, 1.1200, 1.1210),
+    candle(START + HOUR, 1.1290, 1.1300, 1.1270, 1.1290),
+    candle(START + 2 * HOUR, 1.1260, 1.1280, 1.1250, 1.1260),
+    candle(START + 3 * HOUR, 1.1380, 1.1390, 1.1360, 1.1400),
+    candle(START + 4 * HOUR, 1.1220, 1.1230, 1.1200, 1.1190),
+    candle(START + 5 * HOUR, 1.1280, 1.1310, 1.1260, 1.1280),
+    candle(START + 6 * HOUR, 1.1180, 1.1200, 1.1150, 1.1140),
+  ]
+  const externalPivots = {
+    ...classifyExternalPivotPath(pivots, { candles }),
+    source: 'Twelve Data',
+    timeframeId: '1h',
+  }
+
+  const result = classifyExternalStructure({ candles, externalPivots })
+
+  assert.deepEqual(
+    result.structure.chartPivots.map((pivot) => [pivot.label, pivot.price, pivot.time]),
+    [['LH', 1.1310, START + 5 * HOUR], ['LL', 1.1150, START + 6 * HOUR]]
+  )
+  assert.deepEqual(
+    [result.structure.activeRange.high.label, result.structure.activeRange.high.price, result.structure.activeRange.low.label, result.structure.activeRange.low.price],
+    ['LH', 1.1310, 'LL', 1.1150]
+  )
+})
+
 test('the active chart wave retains the lowest closed wick from its LH through the current price', () => {
   const result = classifyExternalStructure({
     candles: [
