@@ -4,7 +4,7 @@ import { buildExternalTrendReference, EXTERNAL_PIVOT_SCHEMA } from './external-t
 import { buildFvgSupplyDemandZones, candleSignal, marketStructure } from './priceaction.mjs'
 
 export const PRICE_ACTION_STRUCTURE_ID = 'price-action-structure-v1'
-export const PRICE_ACTION_MATRIX_SCHEMA = 74
+export const PRICE_ACTION_MATRIX_SCHEMA = 75
 export const PRICE_ACTION_CHART_CANDLE_LIMITS = {
   // The zone and structure inputs below remain much longer. These limits only
   // bound chart data published to the browser, where a 60-day 1H / 180-day
@@ -2226,30 +2226,6 @@ const projectExternalPivotsToChart = ({ pivots = [], candles = [], timeframeId =
   return sorted.map((pivot) => projectExternalPivotToChart({ pivot, pivots: sorted, candles, timeframeId }))
 }
 
-// A source pivot confirms the direction and wave origin. Its terminal may be
-// older than the lowest/highest local wick subsequently reached by that same
-// active wave, especially when vendors place a pivot on a different session
-// boundary. The displayed and traded Fibonacci range must therefore run from
-// the confirmed origin through every *closed* chart candle available now.
-const chartTerminalFromActiveOrigin = ({ origin, terminal, candles = [], kind }) => {
-  const candidates = candles.filter((candle) => candle.time >= origin?.time)
-  if (!origin || !terminal || !candidates.length) return terminal
-  const extreme = candidates.reduce((selected, candle) => (
-    kind === 'low'
-      ? candle.low < selected.low ? candle : selected
-      : candle.high > selected.high ? candle : selected
-  ))
-  return {
-    ...terminal,
-    sourceTime: terminal.time,
-    sourcePrice: terminal.price,
-    time: extreme.time,
-    price: kind === 'low' ? extreme.low : extreme.high,
-    close: extreme.close,
-    extreme: kind === 'low' ? extreme.low : extreme.high,
-  }
-}
-
 const chartRangeFromExternalPivots = ({ range, pivots = [], projectedPivots = [], candles = [], timeframeId = null } = {}) => {
   if (!range) return null
   const projectedBySource = new Map(projectedPivots.map((pivot) => [
@@ -2264,11 +2240,9 @@ const chartRangeFromExternalPivots = ({ range, pivots = [], projectedPivots = []
   }
   let high = projectEndpoint(range.high)
   let low = projectEndpoint(range.low)
-  if (range.high.time < range.low.time) {
-    low = chartTerminalFromActiveOrigin({ origin: high, terminal: range.low, candles, kind: 'low' })
-  } else if (range.low.time < range.high.time) {
-    high = chartTerminalFromActiveOrigin({ origin: low, terminal: range.high, candles, kind: 'high' })
-  }
+  // The published terminal was confirmed by a candle close. Do not replace it
+  // with any later wick found while projecting to the dashboard: that would
+  // create an LL/HH without the required closing break.
   if (!(high.price > low.price)) return range
   return {
     high,

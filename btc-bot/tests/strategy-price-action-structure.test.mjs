@@ -296,15 +296,15 @@ test('the dashboard chart replaces an obsolete BoS HH with the current EURUSD-li
   )
 })
 
-test('the active chart wave retains the lowest closed wick from its LH through the current price', () => {
+test('a wick without a closing break cannot replace the published terminal pivot', () => {
   const result = classifyExternalStructure({
     candles: [
       candle(START, 120, 120, 118, 119),
       candle(START + HOUR, 101, 102, 100, 101),
       candle(START + 2 * HOUR, 114, 115, 112, 114),
       candle(START + 3 * HOUR, 91, 92, 90, 89),
-      // A later wick becomes the terminal of this same LH -> LL wave. It is
-      // not a newly confirmed source pivot, but it is the real chart low.
+      // This wick does not close below the published LL, so it must not become
+      // a fresh terminal or change the Fibonacci range.
       candle(START + 4 * HOUR, 90, 93, 82, 91),
     ],
     externalPivots: {
@@ -328,15 +328,15 @@ test('the active chart wave retains the lowest closed wick from its LH through t
   })
 
   assert.equal(result.structure.activeRange.high.price, 115)
-  assert.equal(result.structure.activeRange.low.price, 82)
-  assert.equal(result.structure.activeRange.low.time, START + 4 * HOUR)
+  assert.equal(result.structure.activeRange.low.price, 90)
+  assert.equal(result.structure.activeRange.low.time, START + 3 * HOUR)
   assert.deepEqual(
     result.structure.chartPivots.map((pivot) => [pivot.label, pivot.time, pivot.price]),
-    [['LH', START + 2 * HOUR, 115], ['LL', START + 4 * HOUR, 82]]
+    [['LH', START + 2 * HOUR, 115], ['LL', START + 3 * HOUR, 90]]
   )
 })
 
-test('every production asset and timeframe scans its active wave through the current closed candle', () => {
+test('every production asset and timeframe keeps a published terminal until the external pivot path confirms a replacement', () => {
   for (const [assetIndex, asset] of PRICE_ACTION_ASSETS.entries()) {
     for (const timeframe of PRICE_ACTION_TIMEFRAMES) {
       const period = timeframe.hours * HOUR
@@ -378,8 +378,8 @@ test('every production asset and timeframe scans its active wave through the cur
       })
       const terminal = up ? result.structure.activeRange.high : result.structure.activeRange.low
 
-      assert.equal(terminal.time, START + 2 * period, `${asset.symbol} ${timeframe.id}`)
-      assert.equal(terminal.price, up ? 130 : 90, `${asset.symbol} ${timeframe.id}`)
+      assert.equal(terminal.time, START + period, `${asset.symbol} ${timeframe.id}`)
+      assert.equal(terminal.price, up ? 120 : 100, `${asset.symbol} ${timeframe.id}`)
       assert.ok(result.structure.activeRange.high.price > result.structure.activeRange.low.price, `${asset.symbol} ${timeframe.id}`)
     }
   }

@@ -331,6 +331,134 @@ test('EURUSD-like down continuation reanchors the active wave at its latest conf
   assert.deepEqual(path.chartPivots.map((pivot) => pivot.label), ['LH', 'LL'])
 })
 
+test('backward reconstruction takes the last candle-confirmed LH before the terminal LL', () => {
+  const candles = Array.from({ length: 25 }, (_, index) => ({
+    time: START + index * HOUR,
+    open: 1.1280,
+    high: 1.1290,
+    low: 1.1260,
+    close: 1.1280,
+  }))
+  candles[0] = { time: START, open: 1.1480, high: 1.1500, low: 1.1450, close: 1.1460 }
+  candles[1] = { time: START + HOUR, open: 1.1420, high: 1.1450, low: 1.1400, close: 1.1420 }
+  candles[3] = { time: START + 3 * HOUR, open: 1.1360, high: 1.1390, low: 1.1340, close: 1.1360 }
+  // This high is absent from the broad source path but is a confirmed local
+  // candle pivot. It is the latest LH before the terminal LL.
+  candles[10] = { time: START + 10 * HOUR, open: 1.1280, high: 1.1310, low: 1.1260, close: 1.1280 }
+  candles[18] = { time: START + 18 * HOUR, open: 1.1240, high: 1.1250, low: 1.1220, close: 1.1215 }
+  const path = classifyExternalPivotPath([
+    { kind: 'high', price: 1.1500, close: 1.1460, time: START },
+    { kind: 'low', price: 1.1400, close: 1.1420, time: START + HOUR },
+    { kind: 'high', price: 1.1390, close: 1.1360, time: START + 3 * HOUR },
+    { kind: 'low', price: 1.1220, close: 1.1215, time: START + 18 * HOUR },
+  ], { candles })
+
+  assert.equal(path.trend, 'down')
+  assert.deepEqual(
+    [path.activeRange.high.label, path.activeRange.high.price, path.activeRange.high.time],
+    ['LH', 1.1310, START + 10 * HOUR]
+  )
+  assert.deepEqual(
+    [path.activeRange.low.label, path.activeRange.low.price, path.activeRange.low.time],
+    ['LL', 1.1220, START + 18 * HOUR]
+  )
+  assert.equal(path.activeRange.source, 'external-backward-active-wave')
+  assert.deepEqual(path.chartPivots.slice(-2).map((pivot) => [pivot.label, pivot.time]), [
+    ['LH', START + 10 * HOUR], ['LL', START + 18 * HOUR],
+  ])
+  assert.ok(path.chartPivots.every((pivot, index, sequence) => (
+    index === 0 || pivot.kind !== sequence[index - 1].kind
+  )))
+})
+
+test('backward active-wave reconstruction uses the latest opposite pivot for every asset and timeframe', () => {
+  const timeframeMs = { '1h': HOUR, '4h': 4 * HOUR, '1d': 24 * HOUR }
+  const baseBySymbol = {
+    BTCUSD: 80000,
+    EURUSD: 1.14,
+    GBPUSD: 1.33,
+    USDJPY: 157,
+    USDCHF: 0.82,
+    USDCAD: 1.42,
+    AUDUSD: 0.70,
+    NZDUSD: 0.56,
+  }
+  for (const asset of PRICE_ACTION_ASSETS) {
+    for (const timeframe of PRICE_ACTION_TIMEFRAMES) {
+      const interval = timeframeMs[timeframe.id]
+      const base = baseBySymbol[asset.symbol]
+      const step = base * 0.01
+      const candles = Array.from({ length: 25 }, (_, index) => ({
+        time: START + index * interval,
+        open: base,
+        high: base + step * 0.2,
+        low: base - step * 0.2,
+        close: base,
+      }))
+      candles[0] = { time: START, open: base + step, high: base + step * 2, low: base + step * 1.5, close: base + step * 1.6 }
+      candles[1] = { time: START + interval, open: base + step, high: base + step * 1.4, low: base + step, close: base + step * 1.2 }
+      candles[3] = { time: START + 3 * interval, open: base + step * 0.9, high: base + step * 1.5, low: base + step * 0.7, close: base + step * 0.9 }
+      candles[10] = { time: START + 10 * interval, open: base, high: base + step * 0.8, low: base - step * 0.2, close: base }
+      candles[18] = { time: START + 18 * interval, open: base - step * 0.9, high: base - step * 0.7, low: base - step, close: base - step * 1.1 }
+      const path = classifyExternalPivotPath([
+        { kind: 'high', price: base + step * 2, close: base + step * 1.6, time: START },
+        { kind: 'low', price: base + step, close: base + step * 1.2, time: START + interval },
+        { kind: 'high', price: base + step * 1.5, close: base + step * 0.9, time: START + 3 * interval },
+        { kind: 'low', price: base - step, close: base - step * 1.1, time: START + 18 * interval },
+      ], { candles })
+
+      assert.equal(path.trend, 'down', `${asset.symbol} ${timeframe.id}`)
+      assert.equal(path.activeRange.high.time, START + 10 * interval, `${asset.symbol} ${timeframe.id}`)
+      assert.equal(path.activeRange.low.time, START + 18 * interval, `${asset.symbol} ${timeframe.id}`)
+      assert.equal(path.activeRange.source, 'external-backward-active-wave', `${asset.symbol} ${timeframe.id}`)
+    }
+  }
+})
+
+test('backward active-wave reconstruction mirrors the latest opposite pivot for every asset and timeframe', () => {
+  const timeframeMs = { '1h': HOUR, '4h': 4 * HOUR, '1d': 24 * HOUR }
+  const baseBySymbol = {
+    BTCUSD: 80000,
+    EURUSD: 1.14,
+    GBPUSD: 1.33,
+    USDJPY: 157,
+    USDCHF: 0.82,
+    USDCAD: 1.42,
+    AUDUSD: 0.70,
+    NZDUSD: 0.56,
+  }
+  for (const asset of PRICE_ACTION_ASSETS) {
+    for (const timeframe of PRICE_ACTION_TIMEFRAMES) {
+      const interval = timeframeMs[timeframe.id]
+      const base = baseBySymbol[asset.symbol]
+      const step = base * 0.01
+      const candles = Array.from({ length: 25 }, (_, index) => ({
+        time: START + index * interval,
+        open: base,
+        high: base + step * 0.2,
+        low: base - step * 0.2,
+        close: base,
+      }))
+      candles[0] = { time: START, open: base - step, high: base - step * 1.5, low: base - step * 2, close: base - step * 1.6 }
+      candles[1] = { time: START + interval, open: base - step, high: base - step, low: base - step * 1.4, close: base - step * 1.2 }
+      candles[3] = { time: START + 3 * interval, open: base - step * 0.9, high: base - step * 0.7, low: base - step * 1.5, close: base - step * 1.3 }
+      candles[10] = { time: START + 10 * interval, open: base, high: base + step * 0.2, low: base - step * 0.8, close: base }
+      candles[18] = { time: START + 18 * interval, open: base + step * 0.9, high: base + step, low: base + step * 0.7, close: base + step * 1.1 }
+      const path = classifyExternalPivotPath([
+        { kind: 'low', price: base - step * 2, close: base - step * 1.6, time: START },
+        { kind: 'high', price: base - step, close: base - step * 1.2, time: START + interval },
+        { kind: 'low', price: base - step * 1.5, close: base - step * 1.3, time: START + 3 * interval },
+        { kind: 'high', price: base + step, close: base + step * 1.1, time: START + 18 * interval },
+      ], { candles })
+
+      assert.equal(path.trend, 'up', `${asset.symbol} ${timeframe.id}`)
+      assert.equal(path.activeRange.low.time, START + 10 * interval, `${asset.symbol} ${timeframe.id}`)
+      assert.equal(path.activeRange.high.time, START + 18 * interval, `${asset.symbol} ${timeframe.id}`)
+      assert.equal(path.activeRange.source, 'external-backward-active-wave', `${asset.symbol} ${timeframe.id}`)
+    }
+  }
+})
+
 test('up continuation reanchors the active wave at its latest confirmed HL', () => {
   const pivots = [
     { kind: 'high', price: 120, close: 119, time: START },

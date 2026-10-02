@@ -15,7 +15,7 @@ export const EXTERNAL_PIVOT_METHOD = 'Potvrzené 10-svíčkové pivoty z extern�
 // Bump this whenever pivot geometry or confirmation changes. Cached external
 // references are executable strategy input, so a same-hour cache must never
 // preserve the old interpretation after such a change.
-export const EXTERNAL_PIVOT_SCHEMA = 8
+export const EXTERNAL_PIVOT_SCHEMA = 9
 export const EXTERNAL_PIVOT_PERIOD = 10
 export const EXTERNAL_PIVOT_FALLBACK_PERIOD = 5
 export const EXTERNAL_PIVOT_OUTPUTSIZE = 2000
@@ -329,6 +329,89 @@ const extendActiveRangeAtClosedTerminal = ({ range, trend, pivots = [], candles 
   return extended ? nextRange : null
 }
 
+// The active Fibonacci leg is intentionally reconstructed backwards from its
+// latest confirmed end. A provider's broad pivot path can retain an old BoS
+// anchor for much longer than the move that follows it. Starting at the last
+// LL/HH, then alternating through the nearest earlier opposite candle pivots,
+// gives the chart the same local wave sequence a trader sees on the candles.
+// The last opposite pivot is the only permitted origin of the active leg.
+const backwardWaveCandidates = ({ pivots = [], candles = [] } = {}) => {
+  const fallback = confirmedPivotCandidates(candles, EXTERNAL_PIVOT_FALLBACK_PERIOD)
+  const candidates = [...pivots, ...fallback]
+    .filter((pivot) => pivot?.kind === 'high' || pivot?.kind === 'low')
+    .filter((pivot) => Number.isFinite(pivot?.time) && Number.isFinite(numberOrNull(pivot?.price)))
+    .sort((left, right) => left.time - right.time)
+  const unique = new Map()
+  for (const source of candidates) {
+    const price = numberOrNull(source.extreme) ?? numberOrNull(source.price)
+    const key = `${source.kind}:${source.time}`
+    const previous = unique.get(key)
+    // A source and a fallback pivot can identify the same candle. Keep the
+    // structural wick and retain a source label when the prices are equal.
+    const replaces = !previous
+      || (source.kind === 'high' ? price > previous.price : price < previous.price)
+      || (price === previous.price && source.label && !previous.label)
+    if (replaces) unique.set(key, { ...source, price, extreme: price })
+  }
+  return [...unique.values()].sort((left, right) => left.time - right.time)
+}
+
+const backwardActiveWave = ({ range, trend, pivots = [], candles = [] } = {}) => {
+  if (!range || (trend !== 'up' && trend !== 'down')) return null
+  const terminalKind = trend === 'down' ? 'low' : 'high'
+  const terminal = trend === 'down' ? range.low : range.high
+  const protectedOrigin = trend === 'down' ? range.high : range.low
+  if (!terminal || !protectedOrigin || terminal.kind !== terminalKind) return null
+
+  const candidates = backwardWaveCandidates({ pivots, candles })
+  const backwards = [{ ...terminal }]
+  let requiredKind = terminalKind === 'low' ? 'high' : 'low'
+  let later = terminal
+  let before = terminal.time
+  while (backwards.length < 6) {
+    const previous = candidates
+      .filter((pivot) => pivot.kind === requiredKind && pivot.time < before)
+      .toReversed()
+      .find((pivot) => (
+        requiredKind === 'high' ? pivot.price > later.price : pivot.price < later.price
+      ))
+    if (!previous) break
+    backwards.push(previous)
+    before = previous.time
+    later = previous
+    requiredKind = requiredKind === 'high' ? 'low' : 'high'
+  }
+
+  const origin = backwards[1]
+  if (!origin) return null
+  const staysDirectional = trend === 'down'
+    ? origin.kind === 'high' && origin.price > terminal.price && origin.price < protectedOrigin.price
+    : origin.kind === 'low' && origin.price < terminal.price && origin.price > protectedOrigin.price
+  if (!staysDirectional) return null
+
+  const high = trend === 'down'
+    ? { ...origin, label: 'LH' }
+    : { ...terminal, label: 'HH' }
+  const low = trend === 'down'
+    ? { ...terminal, label: 'LL' }
+    : { ...origin, label: 'HL' }
+  if (!(high.price > low.price)) return null
+
+  const chartPivots = backwards
+    .toReversed()
+    .map((pivot, index, sequence) => {
+      const isOrigin = index === sequence.length - 2
+      const isTerminal = index === sequence.length - 1
+      if (isOrigin) return trend === 'down' ? high : low
+      if (isTerminal) return trend === 'down' ? low : high
+      return { ...pivot, label: pivot.label ?? (pivot.kind === 'high' ? 'H' : 'L') }
+    })
+  return {
+    activeRange: { high, low, source: 'external-backward-active-wave' },
+    chartPivots,
+  }
+}
+
 // A structural reversal is confirmed only by a candle close through the
 // protected opposite wick. The first impulse after that break still starts at
 // the old HH/LL: a local counter-swing may not replace this Fibonacci anchor.
@@ -509,7 +592,13 @@ export const classifyExternalPivotPath = (pivots = [], { candles = [], candlesAr
     pivots: path,
     candles: completedCandles,
   })
-  const activeRange = terminalRange ?? confirmedRange
+  const backwardWave = backwardActiveWave({
+    range: terminalRange ?? confirmedRange,
+    trend,
+    pivots: path,
+    candles: completedCandles,
+  })
+  const activeRange = backwardWave?.activeRange ?? terminalRange ?? confirmedRange
   return {
     trend,
     pivots: path.slice(-12),
@@ -522,11 +611,12 @@ export const classifyExternalPivotPath = (pivots = [], { candles = [], candlesAr
           protectedPivot: event.protectedPivot,
         }
       : null,
-    chartPivots: terminalRange
-      ? [activeRange.high, activeRange.low].sort((left, right) => left.time - right.time)
-      : continuation
-      ? chartPivotsForDirectionalLeg({ pivots: path, leg: continuation })
-      : event ? chartPivotsForBreak({ pivots: path, event }) : null,
+    chartPivots: backwardWave?.chartPivots
+      ?? (terminalRange
+        ? [activeRange.high, activeRange.low].sort((left, right) => left.time - right.time)
+        : continuation
+          ? chartPivotsForDirectionalLeg({ pivots: path, leg: continuation })
+          : event ? chartPivotsForBreak({ pivots: path, event }) : null),
   }
 }
 
