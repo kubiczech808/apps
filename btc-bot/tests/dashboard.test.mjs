@@ -15,8 +15,8 @@ test('the dashboard script parses before deployment', () => {
 })
 
 test('dashboard assets have an explicit release version instead of the permanent dev cache key', () => {
-  assert.match(html, /assets\/app\.css\?v=20261002-ui/)
-  assert.match(html, /assets\/app\.js\?v=20261002-ui/)
+  assert.match(html, /assets\/app\.css\?v=20261002-allocated-positions/)
+  assert.match(html, /assets\/app\.js\?v=20261002-allocated-positions/)
   assert.doesNotMatch(html, /\?v=dev/)
 })
 
@@ -141,8 +141,9 @@ test('capital and P/L are presented in USD while sats remain internal accounting
   assert.match(js, /const allocatedCapitalFor = \(item\)/)
   assert.match(js, /const activeAllocationStatuses = new Set/)
   assert.match(js, /const uniqueAllocationItems = \(items\)/)
-  assert.match(js, /!runningIds\.has\(order\.id\)/)
-  assert.match(js, /Math\.min\(equityUsd, requestedAllocatedCapitalUsd\)/)
+  assert.match(js, /const allocatedCapitalUsd = uniqueAllocationItems\(running\)/)
+  assert.match(js, /Pending orders reserve no capital/)
+  assert.doesNotMatch(js, /uniqueAllocationItems\(\[\.\.\.running, \.\.\.entryOrders\]\)/)
   assert.match(js, /order\.orderRole !== 'take-profit'/)
   assert.match(js, /tile\(\s*'Alokovaný kapitál'/)
   assert.match(js, /volno \$\{usd\(availableCapitalUsd\)\}/)

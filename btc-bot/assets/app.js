@@ -1520,10 +1520,6 @@ const renderPortfolioTiles = (box, { strategyId = null } = {}) => {
   const market = state.market || {}
   const running = (state.positions?.running || []).filter((position) => !strategyId || position.strategyId === strategyId)
   const closed = (state.positions?.closed || []).filter((trade) => !strategyId || trade.strategyId === strategyId)
-  const runningIds = new Set(running.map((position) => position.id).filter(Boolean))
-  const entryOrders = (state.positions?.orders || []).filter((order) =>
-    !runningIds.has(order.id) && (!strategyId || order.strategyId === strategyId)
-  )
   const stats = strategyId ? realizedStatsForTrades(closed) : accountStats
 
   // The capital delta and both P/L tiles use the same visible scope, so their
@@ -1535,13 +1531,10 @@ const renderPortfolioTiles = (box, { strategyId = null } = {}) => {
     : null
   const benchmark = capitalBenchmark({ account, market, stats: accountStats, pnlDeltaUsd })
   const equityUsd = benchmark.equityUsd
-  const requestedAllocatedCapitalUsd = uniqueAllocationItems([...running, ...entryOrders])
+  // Pending orders reserve no capital. The tile represents only what is
+  // actually invested in currently running positions.
+  const allocatedCapitalUsd = uniqueAllocationItems(running)
     .reduce((sum, item) => sum + (allocatedCapitalFor(item) ?? 0), 0)
-  // Corrupted or duplicated historical rows must not make the dashboard claim
-  // that more capital is allocated than the account actually owns.
-  const allocatedCapitalUsd = Number.isFinite(equityUsd)
-    ? Math.min(equityUsd, requestedAllocatedCapitalUsd)
-    : requestedAllocatedCapitalUsd
   const availableCapitalUsd = Number.isFinite(equityUsd)
     ? Math.max(0, equityUsd - allocatedCapitalUsd)
     : null
