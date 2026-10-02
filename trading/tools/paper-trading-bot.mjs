@@ -3910,7 +3910,7 @@ async function refreshStoredMarketObservationResolutionStatuses(observations = [
 function mergeTrade(existing, incoming) {
   if (!existing) return incoming;
   if (!incoming) return existing;
-  const closedStatuses = new Set(["WON", "LOST", "CLOSED", "CANCELLED", "CANCELED", "STOP_LOSS", "STOP_GAP"]);
+  const closedStatuses = new Set(["WON", "LOST", "CLOSED", "CANCELLED", "CANCELED", "STOP_LOSS", "STOP_GAP", "VOID"]);
   const existingClosed = closedStatuses.has(String(existing.status || "").toUpperCase());
   const incomingClosed = closedStatuses.has(String(incoming.status || "").toUpperCase());
   if (incomingClosed && !existingClosed) return incoming;
@@ -3923,7 +3923,7 @@ function retainPaperTrades(trades = []) {
   const closed = [];
   for (const trade of Array.isArray(trades) ? trades : []) {
     const status = String(trade?.status || "OPEN").toUpperCase();
-    (["WON", "LOST", "CLOSED", "CANCELLED", "CANCELED", "STOP_LOSS", "STOP_GAP", "LIMIT_ORDER_EXPIRED"].includes(status) ? closed : active).push(trade);
+    (["WON", "LOST", "CLOSED", "CANCELLED", "CANCELED", "STOP_LOSS", "STOP_GAP", "VOID", "LIMIT_ORDER_EXPIRED"].includes(status) ? closed : active).push(trade);
   }
   return [
     ...active,
@@ -5769,6 +5769,34 @@ async function markOpenTrade(trade, strategy = null, funding = null) {
       riskMultiplier: trade.riskTargetUsdc ? 1 : (trade.stopLossRiskMultiplier ?? 1),
     }), floor, trade);
   };
+
+  // Gamma exposes a cancelled or otherwise voided market as closed, non-tradable and
+  // settled at fifty cents on both sides. It is a completed refund, not a position that
+  // can still resolve later. Leaving it PENDING_RESOLUTION traps its capital forever.
+  const resolvedAsVoid = market.closed
+    && market.acceptingOrders === false
+    && String(market.umaResolutionStatus || "").trim().toLowerCase() === "resolved"
+    && Number.isFinite(resolvedPrice)
+    && Math.abs(resolvedPrice - 0.5) <= 0.0001;
+
+  if (resolvedAsVoid) {
+    const refundValueUsdc = Number((Number(trade.shares || 0) * resolvedPrice).toFixed(4));
+    const realizedPnlUsdc = Number((refundValueUsdc - cost).toFixed(4));
+    return {
+      ...base,
+      status: "VOID",
+      closedAt: checkedAt,
+      resolvedAt: market.closedTime || checkedAt,
+      finalOutcomePrice: Number(resolvedPrice.toFixed(4)),
+      currentPrice: Number(resolvedPrice.toFixed(4)),
+      currentValueUsdc: refundValueUsdc,
+      unrealizedPnlUsdc: 0,
+      unrealizedPnlPct: 0,
+      realizedPnlUsdc,
+      realizedPnlPct: pnlPercent(realizedPnlUsdc, cost),
+      statusNote: `Polymarket voided this market and refunded ${resolvedPrice.toFixed(4)} per share.`,
+    };
+  }
 
   if (market.closed && Number.isFinite(resolvedPrice)) {
     const won = resolvedPrice >= 0.999;

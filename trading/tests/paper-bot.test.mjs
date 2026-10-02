@@ -34,6 +34,47 @@ test("economics: a persisted fee market keeps its taker rate during revalidation
   });
 });
 
+test("paper maintenance: a final fifty-cent refund releases a disabled portfolio position", async () => {
+  // A closed market at 0.50/0.50 is a refund only once Gamma has confirmed UMA
+  // resolution. Before that confirmation it must remain pending, never be guessed.
+  const originalFetch = globalThis.fetch;
+  const slug = "void-refund-regression-fixture";
+  globalThis.fetch = async (url) => {
+    assert.match(String(url), /gamma-api\.polymarket\.com\/markets/);
+    return new Response(JSON.stringify([{
+      slug,
+      question: "Void fixture",
+      outcomes: JSON.stringify(["Yes", "No"]),
+      outcomePrices: JSON.stringify(["0.5", "0.5"]),
+      clobTokenIds: JSON.stringify(["void-token", "other-token"]),
+      closed: true,
+      active: false,
+      acceptingOrders: false,
+      umaResolutionStatus: "resolved",
+      closedTime: "2026-10-02T10:00:00.000Z",
+    }]), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  try {
+    const marked = await bot.markOpenTrade({
+      id: "void-trade",
+      status: "OPEN",
+      slug,
+      tokenId: "void-token",
+      outcome: "Yes",
+      shares: 10,
+      totalCostUsdc: 5.1,
+      entryPrice: 0.5,
+      stakeUsdc: 5,
+    }, { automationEnabled: false });
+    assert.equal(marked.status, "VOID");
+    assert.equal(marked.currentValueUsdc, 5);
+    assert.equal(marked.realizedPnlUsdc, -0.1);
+    assert.ok(marked.closedAt, "a void is terminal and releases its allocation");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("equal paper portfolio: its independent $100 account is registered with a synthetic risk cap", () => {
   assert.equal(bot.PAPER_STRATEGIES.equal.label, "Equal");
   assert.equal(bot.PAPER_STRATEGIES.equal.equalRiskProtection, true);

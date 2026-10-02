@@ -4383,7 +4383,7 @@ function tradePnlPct(trade) {
 }
 
 function isClosedTrade(trade) {
-  return ["WON", "LOST", "CLOSED", "REDEEMED", "SOLD", "REDEEM_REQUIRED", "RESOLVED", "STOP_LOSS", "STOP_GAP", "LIMIT_ORDER_EXPIRED"].includes(String(trade.status || "").toUpperCase());
+  return ["WON", "LOST", "CLOSED", "REDEEMED", "SOLD", "REDEEM_REQUIRED", "RESOLVED", "STOP_LOSS", "STOP_GAP", "VOID", "LIMIT_ORDER_EXPIRED"].includes(String(trade.status || "").toUpperCase());
 }
 
 // An expired resting bid is an audit record, not a closed position: no shares were

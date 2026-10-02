@@ -64,14 +64,11 @@ export function plannedDispatches(config = {}, {
   //
   // GitHub's schedule delivery is opportunistic: a portfolio set to `cron`
   // could otherwise wait several hours despite the market scanner completing
-  // every few minutes. Archived and disabled portfolios are deliberately not
-  // a reason to dispatch work.
-  const hasPaperExecution = Object.values(paper).some((portfolio) =>
-    portfolio?.archived !== true
-    && portfolio?.automationEnabled !== false
-    && ["after_scrape", "cron"].includes(String(portfolio?.executionTrigger || "cron").trim().toLowerCase()),
-  );
-  if (hasPaperExecution) {
+  // every few minutes. A disabled portfolio must still get this maintenance
+  // pass: its switch blocks new entries inside the paper bot, never resolution,
+  // certainty exits or its existing stop-loss protection.
+  const hasPaperMaintenance = Object.values(paper).some((portfolio) => portfolio?.archived !== true);
+  if (hasPaperMaintenance) {
     planned.push({ workflow: "trading-paper-bot.yml", inputs: { mode: "after_scan" } });
   }
   // The live portfolios are woken on either trigger, for the same reason the paper ones

@@ -139,6 +139,24 @@ test("the live-only tick wakes the live portfolios and nothing else", () => {
     "a created portfolio must still write its own state rather than the shared account's");
 });
 
+test("a disabled paper portfolio is still woken for position maintenance", () => {
+  // Automation off forbids a new simulated entry, but open positions still need their
+  // stop, certainty exit and final settlement reviewed after each scrape.
+  const disabledOnly = plannedDispatches({
+    paper: {
+      paused: { automationEnabled: false, executionTrigger: "cron" },
+    },
+  });
+  assert.deepEqual(disabledOnly, [{ workflow: "trading-paper-bot.yml", inputs: { mode: "after_scan" } }]);
+
+  const archivedOnly = plannedDispatches({
+    paper: {
+      retired: { archived: true, automationEnabled: false },
+    },
+  });
+  assert.deepEqual(archivedOnly, [], "archived paper portfolios do not schedule maintenance work");
+});
+
 test("each live execution run states the portfolio and state file it actually used", () => {
   // A custom live portfolio can share the runner and workflow with another one. The
   // browser has to be able to prove which portfolio a completed run belonged to; otherwise
