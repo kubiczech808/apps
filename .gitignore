@@ -4,6 +4,7 @@
 email-campaign/config.php
 email-campaign/storage/*.sqlite
 trading/config.php
+trading/data/.cache/
 
 # Python
 __pycache__/

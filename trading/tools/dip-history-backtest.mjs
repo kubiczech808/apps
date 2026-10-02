@@ -4,6 +4,7 @@
 
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 
 const APP_HOST = (process.env.DIP_BACKTEST_APP_HOST || "https://osobnizkusenosti.cz/trading").replace(/\/$/, "");
 const CLOB_HOST = (process.env.POLYMARKET_CLOB_API || "https://clob.polymarket.com").replace(/\/$/, "");
@@ -307,7 +308,9 @@ export function clobHistoryWindows(start, end) {
   return windows;
 }
 
-async function fetchMarketHistory(row) {
+// Shared by the direct Gamma sampler as well. Keeping its CLOB request construction here
+// prevents a second backtest path from quietly using a different opening or in-play window.
+export async function fetchMarketHistory(row) {
   const tokenId = sourceToken(row);
   const requests = historyRequests(row);
   if (!tokenId || !requests.length) return [];
@@ -493,7 +496,7 @@ async function main() {
   console.log(`Backtest ${TAG}: ${report.coverage.cachedMarkets}/${report.coverage.sourceMarkets} cached, ${report.coverage.pendingMarkets} pending`);
 }
 
-if (import.meta.url === `file://${process.argv[1]?.replace(/\\/g, "/")}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((error) => {
     console.error(error?.stack || error);
     process.exitCode = 1;
