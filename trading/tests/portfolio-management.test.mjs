@@ -184,6 +184,18 @@ test("run log history: opening a paper log loads the retained operational window
     "the post-run redraw must wait for the portfolio's newly published execution log");
 });
 
+test("dashboard: portfolio labels never render before the saved configuration is ready", () => {
+  const loader = extractFunction(APP, "loadDashboardState");
+  const configGate = loader.indexOf("if (!state.portfolioConfigLoaded)");
+  const sync = loader.indexOf("syncModeUi();");
+  assert.ok(configGate >= 0, "the dashboard must wait for a current portfolio configuration");
+  assert.ok(sync > configGate, "mode controls and the overview must render only after the configuration gate");
+  assert.match(APP, /state\.portfolioConfig = readCachedPortfolioConfig\(\);/,
+    "the last known human-readable portfolio names must be available while the current config is fetched");
+  assert.match(extractFunction(APP, "loadPortfolioConfig"), /state\.portfolioConfigLoaded = true;/,
+    "a completed config request must unlock later dashboard refreshes");
+});
+
 test("trade analysis: entry probability is broken down by whole percentage point", () => {
   const band = new Function(`${extractFunction(APP, "portfolioAnalysisProbability")}
     ${extractFunction(APP, "portfolioAnalysisProbabilityBand")}

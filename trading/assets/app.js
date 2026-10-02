@@ -117,6 +117,10 @@ const state = {
   liveOrderOwnership: [],
   liveOrderOwnershipAt: 0,
   portfolioConfig: null,
+  // A cached config gives the first render real portfolio names. It is still refreshed
+  // before the dashboard chooses a portfolio, so a second device cannot leave this view
+  // on stale membership or automation settings.
+  portfolioConfigLoaded: false,
   portfolioConfigSaveTimer: null,
   parameterDraft: null,
   parameterDraftMode: "",
@@ -9922,6 +9926,7 @@ async function loadPortfolioConfig() {
   } catch {
     state.portfolioConfig = state.portfolioConfig || defaultPortfolioConfig();
   }
+  state.portfolioConfigLoaded = true;
   return state.portfolioConfig;
 }
 
@@ -9933,6 +9938,7 @@ async function savePortfolioConfigNow() {
     body: JSON.stringify({ config: state.portfolioConfig || defaultPortfolioConfig() }),
   });
   state.portfolioConfig = payload.config || state.portfolioConfig || defaultPortfolioConfig();
+  state.portfolioConfigLoaded = true;
   // A successful create/save must be the version a reload starts from. Keeping the
   // older cached config here made a just-created portfolio vanish for one page load.
   writeCachedPortfolioConfig(state.portfolioConfig);
@@ -10938,22 +10944,18 @@ async function ensureLiveExecutionState(mode = state.mode) {
 
 async function loadDashboardState(options = {}) {
   const requestId = ++state.dashboardLoadSeq;
-  syncModeUi();
-  renderKnownStateForMode(normalizeMode(state.mode));
-  if (!state.portfolioConfig) {
+  // Do not let the initial paint derive labels from a portfolio id. A custom portfolio
+  // gets its human name only from the saved configuration, so drawing before this gate
+  // makes IDs flash in the overview before their names arrive.
+  if (!state.portfolioConfigLoaded) {
     await loadPortfolioConfig();
     if (dashboardLoadIsStale({ requestId })) return;
-    // The syncModeUi above ran the preselection before this config existed, so it could
-    // not decide anything: which portfolios there are, which are archived and which are
-    // automated all come from the payload that just arrived. Without a turn here the first
-    // visit of a page whose stored mode is a paper tab commits to that tab and the
-    // preselection never runs again.
-    preselectTopPortfolio();
-    // A preselection that switched the mode has already started its own load, and that
-    // load is now the current one -- so this call must stop rather than fetch the mode it
-    // was originally asked for.
-    if (dashboardLoadIsStale({ requestId })) return;
   }
+  syncModeUi();
+  // syncModeUi may pick the preferred portfolio and start its own dashboard request.
+  // Do not render the previous mode for one frame while that request takes over.
+  if (dashboardLoadIsStale({ requestId })) return;
+  renderKnownStateForMode(normalizeMode(state.mode));
   // Read AFTER the preselection, not before: the whole point is that it may have changed
   // the mode, and dispatching on the pre-preselection value is what sent a page that
   // should have opened on a live portfolio down the paper branch.
@@ -18612,6 +18614,7 @@ els.portfolioOptimizationReport?.addEventListener("click", (event) => {
 });
 
 state.mode = storedMode();
+state.portfolioConfig = readCachedPortfolioConfig();
 state.runLogFilters = storedRunLogFilter(state.mode);
 state.calculationTab = storedCalculationTab();
 state.calculationMinOpen = normalizeCalculationMinimum(storedCalculationPreference(CALCULATION_MIN_OPEN_STORAGE_KEY));
