@@ -10904,7 +10904,14 @@ async function ensureLiveExecutionState(mode = state.mode) {
 
   const request = (async () => {
     try {
-      const execution = await fetchJson(liveExecutionStateFile(executionMode));
+      // A live portfolio owns a separate execution file. Reading that static file directly
+      // can catch the host between its FTP replace steps and leave a phone with an empty
+      // run log even though the server already has the previous complete file. The state
+      // endpoint retries those short upload windows and always reads this exact portfolio.
+      const executionTarget = liveExecutionStateTarget(executionMode);
+      const execution = await fetchApiJson(
+        `api.php?action=state&target=${encodeURIComponent(executionTarget)}&summary=dashboard`,
+      );
       state.liveExecutionByMode = state.liveExecutionByMode || {};
       state.liveExecutionByMode[executionMode] = execution;
       state.liveExecutionStateFetchedAt[executionMode] = Date.now();

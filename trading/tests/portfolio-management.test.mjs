@@ -1720,6 +1720,15 @@ test("run log history: the workflow archives every portfolio's new runs, and the
   assert.match(APP, /loadPortfolioRunLogHistory\(strategyId\);/);
 });
 
+test("live run log: a custom portfolio reads its retrying API state rather than an FTP-replaced static file", () => {
+  const loader = extractFunction(APP, "ensureLiveExecutionState");
+  assert.match(loader, /const executionTarget = liveExecutionStateTarget\(executionMode\);/);
+  assert.match(loader, /fetchApiJson\(\s*`api\.php\?action=state&target=\$\{encodeURIComponent\(executionTarget\)\}&summary=dashboard`/,
+    "a momentary static-file replacement must not make an existing custom live run log look empty");
+  assert.doesNotMatch(loader, /fetchJson\(liveExecutionStateFile\(executionMode\)\)/,
+    "the direct static execution-state path has no retry during FTP replacement");
+});
+
 test("run log history: an empty database window falls back to the portfolio archive", () => {
   const records = extractFunction(API, "portfolio_run_log_records");
   assert.match(records, /if \(\$byRunAt === \[\]\) \{[\s\S]*?portfolio-run-log\/\{\$safeId\}/,
