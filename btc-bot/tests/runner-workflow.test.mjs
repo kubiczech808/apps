@@ -28,9 +28,18 @@ test('the Raspberry Pi resolves the same dashboard key as the web deploy', () =>
 })
 
 test('a rejected Pi publication exposes only safe operational diagnostics', () => {
-  assert.match(workflow, /name: Diagnose rejected dashboard publication/)
-  assert.match(workflow, /if: failure\(\)/)
-  assert.match(workflow, /State was not published\|api\\\.php \(publish\|lease\) HTTP/)
-  assert.match(workflow, /keyFingerprint/)
-  assert.doesNotMatch(workflow, /console\.log\(\{[\s\S]*apiKey/)
+  const diagnostic = workflow.slice(workflow.indexOf('name: Diagnose rejected dashboard publication'))
+  assert.match(diagnostic, /name: Diagnose rejected dashboard publication/)
+  assert.match(diagnostic, /if: always\(\)/)
+  assert.match(diagnostic, /State was not published\|api\\\.php \(publish\|lease\) HTTP/)
+  assert.match(diagnostic, /keyFingerprint/)
+  assert.doesNotMatch(diagnostic, /apiKey/)
+})
+
+test('the Pi deployment retries only its verified lease-protected local snapshot', () => {
+  assert.match(workflow, /name: Restart timer and run one verified pass/)
+  assert.match(workflow, /Verified Pi snapshot was rejected/)
+  assert.match(workflow, /state\.savedBy !== 'rpi-primary-v2'/)
+  assert.match(workflow, /action=publish/)
+  assert.match(workflow, /publishStatus/)
 })

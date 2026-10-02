@@ -298,6 +298,55 @@ jobs:
           }
           NODE
 
+          # A systemd pass first writes its durable local post-mortem cache and
+          # then publishes it. Re-send that already validated snapshot here so
+          # the deploy has a deterministic result even when the service's
+          # network call races a host-side restart. The API accepts it only
+          # from the current lease holder, so this cannot overwrite a newer
+          # runner's state.
+          sudo -u openclaw2 -H node - <<'NODE'
+          const fs = require('node:fs')
+
+          const env = Object.fromEntries(
+            fs.readFileSync('/home/openclaw2/.config/btc-bot.env', 'utf8')
+              .split(/\r?\n/)
+              .filter((line) => line && !line.startsWith('#'))
+              .map((line) => {
+                const separator = line.indexOf('=')
+                return [line.slice(0, separator), line.slice(separator + 1)]
+              })
+          )
+          const apiUrl = env.BOT_API_URL
+          const apiKey = env.BOT_API_KEY
+          const snapshot = fs.readFileSync('/home/openclaw2/.local/state/btc-bot/bot-state.json', 'utf8')
+          const state = JSON.parse(snapshot)
+          if (!apiUrl || !apiKey) throw new Error('Runner API credentials are missing')
+          if (state.savedBy !== 'rpi-primary-v2') throw new Error('Local snapshot was not produced by the primary Pi runner')
+
+          ;(async () => {
+            const response = await fetch(`${apiUrl}?action=publish`, {
+              method: 'POST',
+              headers: {
+                Accept: 'application/json',
+                'Content-Type': 'application/json',
+                'X-Bot-Key': apiKey,
+              },
+              body: snapshot,
+            })
+            const body = await response.text()
+            console.log({
+              publishStatus: response.status,
+              savedBy: state.savedBy,
+              priceActionSchema: state.priceActionMatrix?.schemaVersion,
+              snapshotBytes: Buffer.byteLength(snapshot),
+            })
+            if (!response.ok) throw new Error(`Verified Pi snapshot was rejected: HTTP ${response.status}: ${body.slice(0, 300)}`)
+          })().catch((error) => {
+            console.error(error.stack ?? error.message)
+            process.exitCode = 1
+          })
+          NODE
+
           # A fresh local cache is not enough: the dashboard reads the hosted
           # document. Verify this pass published there, then verify that the
           # timer produces a second heartbeat on its own one minute later.
@@ -364,7 +413,7 @@ jobs:
       # failed verification so an authentication or lease mismatch can be
       # repaired from the deployment run without exposing credentials.
       - name: Diagnose rejected dashboard publication
-        if: failure()
+        if: always()
         shell: bash
         run: |
           set -euo pipefail
