@@ -582,6 +582,12 @@ test('the API refuses stale PA-1 runners before they overwrite current structure
   assert.match(api, /fail\(409, 'Runner uses an obsolete price-action matrix schema\.'\)/)
 })
 
+test('the API accepts the full one-year price-action snapshot published by the primary runner', () => {
+  assert.match(api, /const MAX_BODY_BYTES = 24 \* 1024 \* 1024/)
+  assert.match(api, /A complete 24-market snapshot with a one-year hourly chart/)
+  assert.match(api, /if \(strlen\(\$raw\) > MAX_BODY_BYTES\)/)
+})
+
 test('the API refuses obsolete runners before they can renew the lease', () => {
   assert.match(api, /const RUNNER_CAPABILITIES_FILE = DATA_DIR \. '\/runner-capabilities\.json'/)
   assert.match(api, /\$priceActionSchema = \$body\['priceActionSchema'\] \?\? null/)

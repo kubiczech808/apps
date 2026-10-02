@@ -45,8 +45,10 @@ const PRIMARY_RUNNER_MARKER = DATA_DIR . '/primary-runner-v2.json';
 const MIN_PRICE_ACTION_MATRIX_SCHEMA = 76;
 // The dashboard publishes the full chart history for all assets and
 // timeframes so the browser can reveal up to one year without another API
-// round-trip. Keep a bounded body limit, but above the largest paper snapshot.
-const MAX_BODY_BYTES = 16 * 1024 * 1024;
+// round-trip. A complete 24-market snapshot with a one-year hourly chart
+// horizon is currently just under 17 MiB, so leave operational headroom while
+// retaining a finite protection against accidentally uploading arbitrary data.
+const MAX_BODY_BYTES = 24 * 1024 * 1024;
 
 function fail(int $status, string $message): void
 {
