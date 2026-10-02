@@ -15,7 +15,7 @@ export const EXTERNAL_PIVOT_METHOD = 'Potvrzené pivoty z externího OHLC (šir�
 // Bump this whenever pivot geometry or confirmation changes. Cached external
 // references are executable strategy input, so a same-hour cache must never
 // preserve the old interpretation after such a change.
-export const EXTERNAL_PIVOT_SCHEMA = 10
+export const EXTERNAL_PIVOT_SCHEMA = 11
 export const EXTERNAL_PIVOT_PERIOD = 10
 export const EXTERNAL_PIVOT_FALLBACK_PERIOD = 5
 // The active 1H leg needs to respond to a valid local retracement without
@@ -270,7 +270,8 @@ const latestConfirmedCounterPivot = ({ pivots = [], candles = [], range, trend, 
   const reference = kind === 'high' ? range?.high?.price : range?.low?.price
   if (!kind || !Number.isFinite(reference)) return null
   const isDirectionalCounter = (pivot) => (
-    Number.isFinite(pivot?.price)
+    pivot?.kind === kind
+    && Number.isFinite(pivot?.price)
     && pivot.time > after
     && pivot.time < until
     && (kind === 'high' ? pivot.price < reference : pivot.price > reference)
@@ -394,10 +395,18 @@ const activeWaveCandidates = ({ pivots = [], candles = [] } = {}) =>
 // active LH -> LL / HL -> HH leg after a completed candle closes through the
 // preceding opposite wick. This applies the same close-confirmation rule to
 // the local origin as to the published HH/LL terminal.
-const hasClosedCounterSwing = ({ candidate, terminal, trend, candidates, candles }) => {
+const hasClosedCounterSwing = ({ candidate, terminal, trend, pivots = [], candidates, candles }) => {
   const oppositeKind = trend === 'down' ? 'low' : trend === 'up' ? 'high' : null
   if (!oppositeKind || candidate?.time == null || terminal?.time == null) return false
-  const precedingOpposite = candidates
+  // The closing break must clear the preceding *structural* opposite pivot,
+  // not whichever two-candle reaction happened immediately before a local
+  // candidate. Otherwise a valid LH/HL gets rejected because of an unrelated
+  // micro-swing even though price has already closed through the prior LL/HH.
+  const precedingStructuralOpposite = pivots
+    .filter((pivot) => pivot.kind === oppositeKind && pivot.time < candidate.time)
+    .toReversed()
+    .find((pivot) => Number.isFinite(pivot.price))
+  const precedingOpposite = precedingStructuralOpposite ?? candidates
     .filter((pivot) => pivot.kind === oppositeKind && pivot.time < candidate.time)
     .toReversed()
     .find((pivot) => Number.isFinite(pivot.price))
@@ -426,7 +435,7 @@ const backwardActiveWave = ({ range, trend, pivots = [], candles = [] } = {}) =>
     .toReversed()
     .find((pivot) => (
       (originKind === 'high' ? pivot.price > terminal.price : pivot.price < terminal.price)
-      && hasClosedCounterSwing({ candidate: pivot, terminal, trend, candidates, candles })
+      && hasClosedCounterSwing({ candidate: pivot, terminal, trend, pivots, candidates, candles })
     ))
   if (!origin) return null
   const staysDirectional = trend === 'down'

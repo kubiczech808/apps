@@ -378,6 +378,131 @@ test('backward reconstruction takes the last candle-confirmed LH before the term
   )))
 })
 
+test('EURUSD 1H-style continuation replaces an obsolete HH with the last confirmed local LH', () => {
+  const candles = Array.from({ length: 25 }, (_, index) => ({
+    time: START + index * HOUR,
+    open: 1.1350,
+    high: 1.1360,
+    low: 1.1340,
+    close: 1.1350,
+  }))
+  const set = (index, open, high, low, close) => {
+    candles[index] = { time: START + index * HOUR, open, high, low, close }
+  }
+  set(0, 1.1500, 1.1500, 1.1450, 1.1460)
+  set(1, 1.1320, 1.1350, 1.1300, 1.1320)
+  set(2, 1.1350, 1.1360, 1.1320, 1.1350)
+  set(3, 1.1380, 1.1390, 1.1360, 1.1380)
+  set(4, 1.1360, 1.1380, 1.1350, 1.1360)
+  set(5, 1.1410, 1.14163, 1.1390, 1.1410)
+  set(6, 1.1370, 1.1390, 1.1360, 1.1370)
+  // The first close below the protected HL establishes a down structure.
+  set(7, 1.1360, 1.1370, 1.1320, 1.1360)
+  set(8, 1.1320, 1.1340, 1.13097, 1.1320)
+  // This wick is a local low, but its close remains above the external LL.
+  // It must not become the level used to reject the later local high.
+  set(9, 1.1312, 1.1315, 1.1290, 1.1312)
+  set(10, 1.1311, 1.1312, 1.1285, 1.1311)
+  set(11, 1.1315, 1.1320, 1.1290, 1.1315)
+  set(12, 1.1313, 1.1316, 1.1290, 1.1313)
+  set(13, 1.1310, 1.1315, 1.1287, 1.1310)
+  // The later close is below the structural LL at 1.13097, but remains above
+  // the incidental 1.1285 wick. The 1.1320 high is therefore the active LH.
+  set(20, 1.1300, 1.1310, 1.1220, 1.12917)
+
+  const path = classifyExternalPivotPath([
+    { kind: 'high', price: 1.1500, close: 1.1460, time: START },
+    { kind: 'low', price: 1.1300, close: 1.1320, time: START + HOUR },
+    { kind: 'high', price: 1.1390, close: 1.1380, time: START + 3 * HOUR },
+    { kind: 'low', price: 1.1350, close: 1.1360, time: START + 4 * HOUR },
+    { kind: 'high', price: 1.14163, close: 1.1410, time: START + 5 * HOUR },
+    { kind: 'low', price: 1.13097, close: 1.1320, time: START + 8 * HOUR },
+  ], { candles })
+
+  assert.equal(path.trend, 'down')
+  assert.deepEqual(
+    [path.activeRange.high.kind, path.activeRange.high.label, path.activeRange.high.price, path.activeRange.high.time],
+    ['high', 'LH', 1.1320, START + 11 * HOUR]
+  )
+  assert.deepEqual(
+    [path.activeRange.low.kind, path.activeRange.low.label, path.activeRange.low.price, path.activeRange.low.time],
+    ['low', 'LL', 1.1220, START + 20 * HOUR]
+  )
+  assert.equal(path.activeRange.source, 'external-backward-active-wave')
+})
+
+test('a structural close retains a type-correct active LH to LL wave for every asset and timeframe', () => {
+  const timeframeMs = { '1h': HOUR, '4h': 4 * HOUR, '1d': 24 * HOUR }
+  const baseBySymbol = {
+    BTCUSD: 80000,
+    EURUSD: 1.14,
+    GBPUSD: 1.33,
+    USDJPY: 157,
+    USDCHF: 0.82,
+    USDCAD: 1.42,
+    AUDUSD: 0.70,
+    NZDUSD: 0.56,
+  }
+  for (const asset of PRICE_ACTION_ASSETS) {
+    for (const timeframe of PRICE_ACTION_TIMEFRAMES) {
+      const scale = baseBySymbol[asset.symbol]
+      const interval = timeframeMs[timeframe.id]
+      const candles = Array.from({ length: 28 }, (_, index) => ({
+        time: START + index * interval,
+        open: scale * 0.986,
+        high: scale * 0.994,
+        low: scale * 0.982,
+        close: scale * 0.986,
+      }))
+      const set = (index, open, high, low, close) => {
+        candles[index] = {
+          time: START + index * interval,
+          open: scale * open,
+          high: scale * high,
+          low: scale * low,
+          close: scale * close,
+        }
+      }
+      set(0, 1.050, 1.050, 1.045, 1.046)
+      set(1, 0.982, 0.985, 0.980, 0.982)
+      set(2, 1.000, 1.002, 0.985, 0.998)
+      set(3, 1.038, 1.040, 1.035, 1.038)
+      set(4, 0.995, 1.000, 0.990, 0.995)
+      set(5, 1.043, 1.045, 1.039, 1.043)
+      set(6, 0.988, 0.989, 0.986, 0.987)
+      set(7, 0.991, 0.992, 0.986, 0.991)
+      set(8, 0.987, 0.990, 0.985, 0.987)
+      set(9, 0.987, 0.992, 0.983, 0.987)
+      set(10, 0.987, 0.993, 0.980, 0.987)
+      set(11, 0.990, 0.995, 0.985, 0.990)
+      set(12, 0.988, 0.994, 0.985, 0.988)
+      set(13, 0.986, 0.993, 0.982, 0.986)
+      set(20, 0.986, 0.990, 0.970, 0.984)
+
+      const path = classifyExternalPivotPath([
+        { kind: 'high', price: scale * 1.050, close: scale * 1.046, time: START },
+        { kind: 'low', price: scale * 0.980, close: scale * 0.982, time: START + interval },
+        { kind: 'high', price: scale * 1.040, close: scale * 1.038, time: START + 3 * interval },
+        { kind: 'low', price: scale * 0.990, close: scale * 0.995, time: START + 4 * interval },
+        { kind: 'high', price: scale * 1.045, close: scale * 1.043, time: START + 5 * interval },
+        { kind: 'low', price: scale * 0.985, close: scale * 0.987, time: START + 8 * interval },
+      ], { candles })
+
+      assert.equal(path.trend, 'down', `${asset.symbol} ${timeframe.id}`)
+      assert.deepEqual(
+        [path.activeRange.high.kind, path.activeRange.high.label, path.activeRange.high.time],
+        ['high', 'LH', START + 11 * interval],
+        `${asset.symbol} ${timeframe.id}`
+      )
+      assert.deepEqual(
+        [path.activeRange.low.kind, path.activeRange.low.label, path.activeRange.low.time],
+        ['low', 'LL', START + 20 * interval],
+        `${asset.symbol} ${timeframe.id}`
+      )
+    }
+  }
+})
+
 test('a local two-candle high cannot replace the active origin without a later closing break', () => {
   const candles = Array.from({ length: 25 }, (_, index) => ({
     time: START + index * HOUR,
@@ -392,15 +517,15 @@ test('a local two-candle high cannot replace the active origin without a later c
   candles[5] = { time: START + 5 * HOUR, open: 1.1300, high: 1.1320, low: 1.1260, close: 1.1280 }
   candles[8] = { time: START + 8 * HOUR, open: 1.1270, high: 1.1290, low: 1.1250, close: 1.1270 }
   candles[10] = { time: START + 10 * HOUR, open: 1.1280, high: 1.1310, low: 1.1260, close: 1.1280 }
-  // The terminal wick is lower, but its close remains above the low before
-  // the 1.131 high. That high must stay an unconfirmed reaction.
+  // The terminal wick is lower, but its close remains above the preceding
+  // structural LL. That high must stay an unconfirmed reaction.
   candles[18] = { time: START + 18 * HOUR, open: 1.1265, high: 1.1270, low: 1.1220, close: 1.1260 }
 
   const path = classifyExternalPivotPath([
     { kind: 'high', price: 1.1500, close: 1.1460, time: START },
     { kind: 'low', price: 1.1400, close: 1.1420, time: START + HOUR },
     { kind: 'high', price: 1.1390, close: 1.1360, time: START + 3 * HOUR },
-    { kind: 'low', price: 1.1220, close: 1.1215, time: START + 18 * HOUR },
+    { kind: 'low', price: 1.1250, close: 1.1270, time: START + 8 * HOUR },
   ], { candles })
 
   assert.equal(path.trend, 'down')
