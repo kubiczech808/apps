@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { EXTERNAL_PIVOT_SCHEMA, buildExternalTrendReference, canReuseExternalPivotBucket, classifyExternalPivotPath, classifyExternalTrend, confirmedExternalPivotCandidates, confirmedExternalPivotPath, fetchTwelveDataFxHourly, fetchTwelveDataFxPivots } from '../src/external-trends.mjs'
+import { EXTERNAL_PIVOT_SCHEMA, buildExternalTrendReference, canReuseExternalPivotBucket, classifyExternalPivotPath, classifyExternalTrend, confirmedExternalPivotCandidates, confirmedExternalPivotPath, fetchTwelveDataFxHourly, fetchTwelveDataFxPivots, reanchorCachedExternalPivotReference } from '../src/external-trends.mjs'
 import { PRICE_ACTION_ASSETS, PRICE_ACTION_TIMEFRAMES } from '../src/strategy-price-action-structure.mjs'
 import { HOUR, START } from './helpers.mjs'
 
@@ -45,7 +45,17 @@ test('a rate-limited FX refresh preserves the last confirmed source matrix as st
   const priorTrend = { trend: 'down', source: 'Twelve Data', candles: 240, asOf: START + 200 * HOUR }
   const priorPivot = {
     trend: 'down', source: 'Twelve Data', timeframeId: '1h', asOf: START + 200 * HOUR,
-    pivots: [{ kind: 'high', label: 'LH', price: 1.14, time: START + 180 * HOUR }],
+    pivots: [
+      { kind: 'low', label: 'LL', price: 1.1200, time: START + 180 * HOUR },
+      { kind: 'high', label: 'HH', price: 1.1400, time: START + 184 * HOUR },
+      { kind: 'low', label: 'LL', price: 1.1250, time: START + 190 * HOUR },
+      { kind: 'high', label: 'LH', price: 1.1320, time: START + 194 * HOUR },
+    ],
+    activeRange: {
+      high: { kind: 'high', label: 'HH', price: 1.1400, close: 1.1390, time: START + 184 * HOUR },
+      low: { kind: 'low', label: 'LL', price: 1.1180, close: 1.1200, time: START + 200 * HOUR },
+      source: 'external-break-of-structure',
+    },
   }
   const previous = {
     assets: { EURUSD: { '1h': priorTrend, '4h': priorTrend, '1d': priorTrend } },
@@ -68,7 +78,66 @@ test('a rate-limited FX refresh preserves the last confirmed source matrix as st
   assert.equal(reference.assets.EURUSD['1h'].stale, true)
   assert.equal(reference.pivots.assets.EURUSD['1h'].trend, 'down')
   assert.equal(reference.pivots.assets.EURUSD['1h'].stale, true)
+  assert.deepEqual(
+    reference.pivots.assets.EURUSD['1h'].activeRange,
+    {
+      high: { kind: 'high', label: 'LH', price: 1.1320, time: START + 194 * HOUR, extreme: 1.1320 },
+      low: { kind: 'low', label: 'LL', price: 1.1180, close: 1.1200, time: START + 200 * HOUR },
+      source: 'external-cached-active-wave',
+    }
+  )
   assert.match(reference.failures[0], /429/)
+})
+
+test('cached external active-wave reanchoring is type-correct for every asset and timeframe', () => {
+  const intervalByTimeframe = { '1h': HOUR, '4h': 4 * HOUR, '1d': 24 * HOUR }
+  const baseBySymbol = {
+    BTCUSD: 80000, EURUSD: 1.14, GBPUSD: 1.33, USDJPY: 157,
+    USDCHF: 0.82, USDCAD: 1.42, AUDUSD: 0.70, NZDUSD: 0.57,
+  }
+  for (const asset of PRICE_ACTION_ASSETS) {
+    for (const timeframe of PRICE_ACTION_TIMEFRAMES) {
+      const base = baseBySymbol[asset.symbol]
+      const span = base * 0.01
+      const interval = intervalByTimeframe[timeframe.id]
+      for (const trend of ['down', 'up']) {
+        const isDown = trend === 'down'
+        const protectedPrice = isDown ? base + span : base - span
+        const oppositePrice = isDown ? base - span * 0.2 : base + span * 0.2
+        const originPrice = isDown ? base + span * 0.4 : base - span * 0.4
+        const terminalPrice = isDown ? base - span : base + span
+        const terminalClose = isDown ? base - span * 0.5 : base + span * 0.5
+        const terminalKind = isDown ? 'low' : 'high'
+        const originKind = isDown ? 'high' : 'low'
+        const reference = {
+          trend,
+          pivots: [
+            { kind: terminalKind, price: oppositePrice, time: START },
+            { kind: originKind, price: protectedPrice, time: START + interval },
+            { kind: terminalKind, price: oppositePrice, time: START + 2 * interval },
+            { kind: originKind, price: originPrice, time: START + 3 * interval },
+          ],
+          activeRange: isDown
+            ? {
+                high: { kind: 'high', label: 'HH', price: protectedPrice, close: protectedPrice, time: START + interval },
+                low: { kind: 'low', label: 'LL', price: terminalPrice, close: terminalClose, time: START + 4 * interval },
+                source: 'external-break-of-structure',
+              }
+            : {
+                high: { kind: 'high', label: 'HH', price: terminalPrice, close: terminalClose, time: START + 4 * interval },
+                low: { kind: 'low', label: 'LL', price: protectedPrice, close: protectedPrice, time: START + interval },
+                source: 'external-break-of-structure',
+              },
+        }
+        const rebuilt = reanchorCachedExternalPivotReference(reference)
+        const expectedLabel = isDown ? 'LH' : 'HL'
+        const expected = isDown ? rebuilt.activeRange.high : rebuilt.activeRange.low
+        assert.equal(expected.label, expectedLabel, `${asset.symbol} ${timeframe.id} ${trend}`)
+        assert.equal(expected.time, START + 3 * interval, `${asset.symbol} ${timeframe.id} ${trend}`)
+        assert.equal(rebuilt.activeRange.source, 'external-cached-active-wave', `${asset.symbol} ${timeframe.id} ${trend}`)
+      }
+    }
+  }
 })
 
 test('external trend is a separate EMA regime rather than the PA swing label', () => {

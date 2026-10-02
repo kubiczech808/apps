@@ -15,7 +15,7 @@ export const EXTERNAL_PIVOT_METHOD = 'Potvrzené pivoty z externího OHLC (šir�
 // Bump this whenever pivot geometry or confirmation changes. Cached external
 // references are executable strategy input, so a same-hour cache must never
 // preserve the old interpretation after such a change.
-export const EXTERNAL_PIVOT_SCHEMA = 11
+export const EXTERNAL_PIVOT_SCHEMA = 12
 export const EXTERNAL_PIVOT_PERIOD = 10
 export const EXTERNAL_PIVOT_FALLBACK_PERIOD = 5
 // The active 1H leg needs to respond to a valid local retracement without
@@ -483,6 +483,70 @@ const backwardActiveWave = ({ range, trend, pivots = [], candles = [] } = {}) =>
     })
   return {
     activeRange: { high, low, source: 'external-backward-active-wave' },
+    chartPivots,
+  }
+}
+
+// A source outage must not freeze an obsolete BoS anchor into the dashboard.
+// The cached terminal and pivot path are both external OHLC observations, so
+// they can still form a valid latest LH -> LL / HL -> HH leg without mixing
+// in chart-provider candles. The terminal close is the required confirmation
+// through the preceding opposite source pivot.
+export const reanchorCachedExternalPivotReference = (reference = {}) => {
+  const trend = reference?.trend
+  const range = reference?.activeRange
+  if (!range || (trend !== 'up' && trend !== 'down')) return reference
+  const terminalKind = trend === 'down' ? 'low' : 'high'
+  const originKind = terminalKind === 'low' ? 'high' : 'low'
+  const terminal = terminalKind === 'low' ? range.low : range.high
+  const protectedOrigin = terminalKind === 'low' ? range.high : range.low
+  if (
+    terminal?.kind !== terminalKind
+    || protectedOrigin?.kind !== originKind
+    || !Number.isFinite(terminal?.time)
+    || !Number.isFinite(terminal?.price)
+    || !Number.isFinite(terminal?.close)
+    || !Number.isFinite(protectedOrigin?.price)
+  ) return reference
+
+  const candidates = uniquePivotCandidates(reference.pivots)
+  const origin = candidates
+    .filter((pivot) => (
+      pivot.kind === originKind
+      && pivot.time < terminal.time
+      && (trend === 'down'
+        ? pivot.price > terminal.price && pivot.price < protectedOrigin.price
+        : pivot.price < terminal.price && pivot.price > protectedOrigin.price)
+    ))
+    .toReversed()
+    .find((candidate) => {
+      const precedingOpposite = candidates
+        .filter((pivot) => pivot.kind === terminalKind && pivot.time < candidate.time)
+        .at(-1)
+      if (!precedingOpposite || !Number.isFinite(precedingOpposite.price)) return false
+      return trend === 'down'
+        ? terminal.close < precedingOpposite.price
+        : terminal.close > precedingOpposite.price
+    })
+  if (!origin || (origin.time === protectedOrigin.time && origin.price === protectedOrigin.price)) return reference
+
+  const high = trend === 'down'
+    ? { ...origin, label: 'LH' }
+    : { ...terminal, label: 'HH' }
+  const low = trend === 'down'
+    ? { ...terminal, label: 'LL' }
+    : { ...origin, label: 'HL' }
+  if (!(high.price > low.price)) return reference
+
+  const priorOpposite = candidates
+    .filter((pivot) => pivot.kind === terminalKind && pivot.time < origin.time)
+    .at(-1)
+  const chartPivots = [priorOpposite, trend === 'down' ? high : low, trend === 'down' ? low : high]
+    .filter(Boolean)
+    .map((pivot) => ({ ...pivot, label: pivot.label ?? (pivot.kind === 'high' ? 'H' : 'L') }))
+  return {
+    ...reference,
+    activeRange: { high, low, source: 'external-cached-active-wave' },
     chartPivots,
   }
 }
@@ -1002,7 +1066,7 @@ export const buildExternalTrendReference = async ({
         const previousPivot = previous.pivots.assets?.[asset.symbol]?.[timeframeId]
         if (!pivots.assets?.[asset.symbol]?.[timeframeId] && previousPivot) {
           pivots.assets[asset.symbol][timeframeId] = {
-            ...previousPivot,
+            ...reanchorCachedExternalPivotReference(previousPivot),
             stale: true,
             staleReason: failures.find((failure) => failure.startsWith('Twelve Data:')) ?? null,
           }
