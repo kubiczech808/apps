@@ -105,19 +105,60 @@ jobs:
           os.chmod(path, 0o600)
           PY
 
+      - name: Resolve the dashboard key for the primary runner
+        # Keep this resolution identical to the web deployment. A private
+        # BTC_BOT_KEY must reach both sides, otherwise the Pi can compute a
+        # fresh matrix locally but cannot publish it to the dashboard.
+        env:
+          BTC_BOT_KEY: ${{ secrets.BTC_BOT_KEY }}
+          BTCDCA_FTP_PASSWORD: ${{ secrets.BTCDCA_FTP_PASSWORD }}
+        shell: bash
+        run: |
+          python3 - <<'PY' >> "$GITHUB_ENV"
+          import base64
+          import hashlib
+          import hmac
+          import os
+          import sys
+
+          committed = "ahoj1234567890"
+          explicit = os.environ.get("BTC_BOT_KEY", "")
+          seed = os.environ.get("BTCDCA_FTP_PASSWORD", "")
+
+          if explicit:
+              key, source = explicit, "the BTC_BOT_KEY secret"
+          elif committed:
+              key, source = committed, "the committed public default"
+          elif seed:
+              digest = hmac.new(seed.encode(), b"btc-dca-bot dashboard key v1", hashlib.sha256).digest()
+              key = base64.urlsafe_b64encode(digest).decode().rstrip("=")
+              source = "derived from BTCDCA_FTP_PASSWORD"
+          else:
+              print("::error title=No key material::Set BTC_BOT_KEY, or BTCDCA_FTP_PASSWORD so the key can be derived.", file=sys.stderr)
+              raise SystemExit(1)
+
+          print(f"::add-mask::{key}", file=sys.stderr)
+          print(f"Runner dashboard key {source}; fingerprint {hashlib.sha256(key.encode()).hexdigest()[:12]}", file=sys.stderr)
+          print(f"BOT_API_KEY={key}")
+          PY
+
       - name: Point the primary runner at the canonical dashboard host
         shell: bash
         run: |
           set -euxo pipefail
           config=/home/openclaw2/.config/btc-bot.env
-          # The paper dashboard intentionally exposes this read/write key. Keep
-          # the runner on the same public paper document that the browser reads.
-          sudo env CONFIG_PATH="$config" python3 - <<'PY'
+          # Keep the runner on the exact same protected document that the
+          # browser reads. BOT_API_KEY was resolved above from the same source
+          # as the web deploy and is masked by GitHub Actions.
+          sudo env CONFIG_PATH="$config" BOT_API_KEY="$BOT_API_KEY" python3 - <<'PY'
           import os
           import pwd
           from pathlib import Path
 
           path = Path(os.environ["CONFIG_PATH"])
+          key = os.environ.get("BOT_API_KEY", "").strip()
+          if not key:
+              raise SystemExit("BOT_API_KEY could not be resolved for the primary runner")
           lines = path.read_text(encoding="utf-8").splitlines()
           updated = []
           found_url = False
@@ -127,7 +168,7 @@ jobs:
                   updated.append("BOT_API_URL=https://btc-dca.com/bot/api.php")
                   found_url = True
               elif line.startswith("BOT_API_KEY="):
-                  updated.append("BOT_API_KEY=ahoj1234567890")
+                  updated.append(f"BOT_API_KEY={key}")
               elif line.startswith("BOT_RUNNER="):
                   updated.append("BOT_RUNNER=rpi-primary-v2")
                   found_runner = True
@@ -136,7 +177,7 @@ jobs:
           if not found_url:
               updated.append("BOT_API_URL=https://btc-dca.com/bot/api.php")
           if not any(line.startswith("BOT_API_KEY=") for line in updated):
-              updated.append("BOT_API_KEY=ahoj1234567890")
+              updated.append(f"BOT_API_KEY={key}")
           if not found_runner:
               updated.append("BOT_RUNNER=rpi-primary-v2")
           path.write_text("\n".join(updated) + "\n", encoding="utf-8")

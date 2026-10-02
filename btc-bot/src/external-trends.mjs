@@ -11,13 +11,18 @@ import { normalizeCandlePrices, roundPrice } from './price.mjs'
 export const EXTERNAL_TREND_METHOD = 'EMA 20/50 + zavírací cena'
 export const EXTERNAL_TREND_HOURLY_LIMIT = 5000
 export const EXTERNAL_EMA_CHART_POINT_LIMIT = 600
-export const EXTERNAL_PIVOT_METHOD = 'Potvrzené 10-svíčkové pivoty z externího OHLC'
+export const EXTERNAL_PIVOT_METHOD = 'Potvrzené pivoty z externího OHLC (širší kontext, 1H aktivní vlna: 2 svíčky + close)'
 // Bump this whenever pivot geometry or confirmation changes. Cached external
 // references are executable strategy input, so a same-hour cache must never
 // preserve the old interpretation after such a change.
-export const EXTERNAL_PIVOT_SCHEMA = 9
+export const EXTERNAL_PIVOT_SCHEMA = 10
 export const EXTERNAL_PIVOT_PERIOD = 10
 export const EXTERNAL_PIVOT_FALLBACK_PERIOD = 5
+// The active 1H leg needs to respond to a valid local retracement without
+// turning every wick into structure. Two candles identify the local extreme;
+// the later close through the opposite local wick confirms the leg. Wider
+// timeframes keep the broader five-candle confirmation below.
+export const EXTERNAL_ACTIVE_WAVE_PERIOD = 2
 export const EXTERNAL_PIVOT_OUTPUTSIZE = 2000
 
 const EXTERNAL_PIVOT_INTERVALS = {
@@ -335,14 +340,13 @@ const extendActiveRangeAtClosedTerminal = ({ range, trend, pivots = [], candles 
 // LL/HH, then alternating through the nearest earlier opposite candle pivots,
 // gives the chart the same local wave sequence a trader sees on the candles.
 // The last opposite pivot is the only permitted origin of the active leg.
-const backwardWaveCandidates = ({ pivots = [], candles = [] } = {}) => {
-  const fallback = confirmedPivotCandidates(candles, EXTERNAL_PIVOT_FALLBACK_PERIOD)
-  const candidates = [...pivots, ...fallback]
+const uniquePivotCandidates = (candidates = []) => {
+  const sorted = candidates
     .filter((pivot) => pivot?.kind === 'high' || pivot?.kind === 'low')
     .filter((pivot) => Number.isFinite(pivot?.time) && Number.isFinite(numberOrNull(pivot?.price)))
     .sort((left, right) => left.time - right.time)
   const unique = new Map()
-  for (const source of candidates) {
+  for (const source of sorted) {
     const price = numberOrNull(source.extreme) ?? numberOrNull(source.price)
     const key = `${source.kind}:${source.time}`
     const previous = unique.get(key)
@@ -356,6 +360,57 @@ const backwardWaveCandidates = ({ pivots = [], candles = [] } = {}) => {
   return [...unique.values()].sort((left, right) => left.time - right.time)
 }
 
+// Broad external pivots are useful as the audit path. They deliberately stay
+// separate from the narrow local candidates used to choose the active leg:
+// otherwise an older ten-candle HH can hide a later, valid 1H LH.
+const backwardWaveCandidates = ({ pivots = [], candles = [] } = {}) =>
+  uniquePivotCandidates([
+    ...pivots,
+    ...confirmedPivotCandidates(candles, EXTERNAL_PIVOT_FALLBACK_PERIOD),
+  ])
+
+const activeWavePeriodFor = (candles = []) => {
+  const intervals = candles
+    .slice(1)
+    .map((candle, index) => candle.time - candles[index].time)
+    .filter((interval) => Number.isFinite(interval) && interval > 0)
+    .sort((left, right) => left - right)
+  const median = intervals.length ? intervals[Math.floor(intervals.length / 2)] : null
+  // Two 1H candles are a visible retracement. The same two-candle pattern on
+  // 4H/1D is too short to replace their structural spine, so those timeframes
+  // retain the broad confirmation already used for their published path.
+  return median != null && median <= HOUR_MS * 1.5
+    ? EXTERNAL_ACTIVE_WAVE_PERIOD
+    : EXTERNAL_PIVOT_FALLBACK_PERIOD
+}
+
+const activeWaveCandidates = ({ pivots = [], candles = [] } = {}) =>
+  uniquePivotCandidates([
+    ...backwardWaveCandidates({ pivots, candles }),
+    ...confirmedPivotCandidates(candles, activeWavePeriodFor(candles)),
+  ])
+
+// A two-candle high/low is only an observation. It becomes the origin of an
+// active LH -> LL / HL -> HH leg after a completed candle closes through the
+// preceding opposite wick. This applies the same close-confirmation rule to
+// the local origin as to the published HH/LL terminal.
+const hasClosedCounterSwing = ({ candidate, terminal, trend, candidates, candles }) => {
+  const oppositeKind = trend === 'down' ? 'low' : trend === 'up' ? 'high' : null
+  if (!oppositeKind || candidate?.time == null || terminal?.time == null) return false
+  const precedingOpposite = candidates
+    .filter((pivot) => pivot.kind === oppositeKind && pivot.time < candidate.time)
+    .toReversed()
+    .find((pivot) => Number.isFinite(pivot.price))
+  if (!precedingOpposite) return false
+  const confirmation = firstClosingBreak({
+    candles,
+    after: candidate.time,
+    level: precedingOpposite.price,
+    direction: trend,
+  })
+  return Boolean(confirmation && confirmation.time <= terminal.time)
+}
+
 const backwardActiveWave = ({ range, trend, pivots = [], candles = [] } = {}) => {
   if (!range || (trend !== 'up' && trend !== 'down')) return null
   const terminalKind = trend === 'down' ? 'low' : 'high'
@@ -363,26 +418,16 @@ const backwardActiveWave = ({ range, trend, pivots = [], candles = [] } = {}) =>
   const protectedOrigin = trend === 'down' ? range.high : range.low
   if (!terminal || !protectedOrigin || terminal.kind !== terminalKind) return null
 
-  const candidates = backwardWaveCandidates({ pivots, candles })
-  const backwards = [{ ...terminal }]
-  let requiredKind = terminalKind === 'low' ? 'high' : 'low'
-  let later = terminal
-  let before = terminal.time
-  while (backwards.length < 6) {
-    const previous = candidates
-      .filter((pivot) => pivot.kind === requiredKind && pivot.time < before)
-      .toReversed()
-      .find((pivot) => (
-        requiredKind === 'high' ? pivot.price > later.price : pivot.price < later.price
-      ))
-    if (!previous) break
-    backwards.push(previous)
-    before = previous.time
-    later = previous
-    requiredKind = requiredKind === 'high' ? 'low' : 'high'
-  }
-
-  const origin = backwards[1]
+  const contextCandidates = backwardWaveCandidates({ pivots, candles })
+  const candidates = activeWaveCandidates({ pivots, candles })
+  const originKind = terminalKind === 'low' ? 'high' : 'low'
+  const origin = candidates
+    .filter((pivot) => pivot.kind === originKind && pivot.time < terminal.time)
+    .toReversed()
+    .find((pivot) => (
+      (originKind === 'high' ? pivot.price > terminal.price : pivot.price < terminal.price)
+      && hasClosedCounterSwing({ candidate: pivot, terminal, trend, candidates, candles })
+    ))
   if (!origin) return null
   const staysDirectional = trend === 'down'
     ? origin.kind === 'high' && origin.price > terminal.price && origin.price < protectedOrigin.price
@@ -396,6 +441,27 @@ const backwardActiveWave = ({ range, trend, pivots = [], candles = [] } = {}) =>
     ? { ...terminal, label: 'LL' }
     : { ...origin, label: 'HL' }
   if (!(high.price > low.price)) return null
+
+  // Keep the dashed audit context broad and stable. The narrow two-candle
+  // candidate is intentionally used only for the current solid leg, not to
+  // add a trail of micro-swings behind it.
+  const backwards = [{ ...terminal }, origin]
+  let requiredKind = origin.kind === 'high' ? 'low' : 'high'
+  let later = origin
+  let before = origin.time
+  while (backwards.length < 6) {
+    const previous = contextCandidates
+      .filter((pivot) => pivot.kind === requiredKind && pivot.time < before)
+      .toReversed()
+      .find((pivot) => (
+        requiredKind === 'high' ? pivot.price > later.price : pivot.price < later.price
+      ))
+    if (!previous) break
+    backwards.push(previous)
+    before = previous.time
+    later = previous
+    requiredKind = requiredKind === 'high' ? 'low' : 'high'
+  }
 
   const chartPivots = backwards
     .toReversed()

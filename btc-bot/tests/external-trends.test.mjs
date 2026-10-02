@@ -342,8 +342,15 @@ test('backward reconstruction takes the last candle-confirmed LH before the term
   candles[0] = { time: START, open: 1.1480, high: 1.1500, low: 1.1450, close: 1.1460 }
   candles[1] = { time: START + HOUR, open: 1.1420, high: 1.1450, low: 1.1400, close: 1.1420 }
   candles[3] = { time: START + 3 * HOUR, open: 1.1360, high: 1.1390, low: 1.1340, close: 1.1360 }
+  // This taller candle keeps the later 1.131 high out of the five-candle
+  // window, but it is far enough away not to invalidate the local two-candle
+  // turn. This mirrors the EURUSD 1H regression: a valid LH was hidden by an
+  // older, broader HH.
+  candles[5] = { time: START + 5 * HOUR, open: 1.1300, high: 1.1320, low: 1.1260, close: 1.1280 }
+  candles[8] = { time: START + 8 * HOUR, open: 1.1270, high: 1.1290, low: 1.1250, close: 1.1270 }
   // This high is absent from the broad source path but is a confirmed local
-  // candle pivot. It is the latest LH before the terminal LL.
+  // candle pivot. A later close below the preceding low makes it the latest
+  // LH before the terminal LL.
   candles[10] = { time: START + 10 * HOUR, open: 1.1280, high: 1.1310, low: 1.1260, close: 1.1280 }
   candles[18] = { time: START + 18 * HOUR, open: 1.1240, high: 1.1250, low: 1.1220, close: 1.1215 }
   const path = classifyExternalPivotPath([
@@ -371,7 +378,37 @@ test('backward reconstruction takes the last candle-confirmed LH before the term
   )))
 })
 
-test('backward active-wave reconstruction uses the latest opposite pivot for every asset and timeframe', () => {
+test('a local two-candle high cannot replace the active origin without a later closing break', () => {
+  const candles = Array.from({ length: 25 }, (_, index) => ({
+    time: START + index * HOUR,
+    open: 1.1280,
+    high: 1.1290,
+    low: 1.1260,
+    close: 1.1280,
+  }))
+  candles[0] = { time: START, open: 1.1480, high: 1.1500, low: 1.1450, close: 1.1460 }
+  candles[1] = { time: START + HOUR, open: 1.1420, high: 1.1450, low: 1.1400, close: 1.1420 }
+  candles[3] = { time: START + 3 * HOUR, open: 1.1360, high: 1.1390, low: 1.1340, close: 1.1360 }
+  candles[5] = { time: START + 5 * HOUR, open: 1.1300, high: 1.1320, low: 1.1260, close: 1.1280 }
+  candles[8] = { time: START + 8 * HOUR, open: 1.1270, high: 1.1290, low: 1.1250, close: 1.1270 }
+  candles[10] = { time: START + 10 * HOUR, open: 1.1280, high: 1.1310, low: 1.1260, close: 1.1280 }
+  // The terminal wick is lower, but its close remains above the low before
+  // the 1.131 high. That high must stay an unconfirmed reaction.
+  candles[18] = { time: START + 18 * HOUR, open: 1.1265, high: 1.1270, low: 1.1220, close: 1.1260 }
+
+  const path = classifyExternalPivotPath([
+    { kind: 'high', price: 1.1500, close: 1.1460, time: START },
+    { kind: 'low', price: 1.1400, close: 1.1420, time: START + HOUR },
+    { kind: 'high', price: 1.1390, close: 1.1360, time: START + 3 * HOUR },
+    { kind: 'low', price: 1.1220, close: 1.1215, time: START + 18 * HOUR },
+  ], { candles })
+
+  assert.equal(path.trend, 'down')
+  assert.equal(path.activeRange.high.price, 1.1390)
+  assert.notEqual(path.activeRange.high.price, 1.1310)
+})
+
+test('backward active-wave reconstruction uses the local 1H pivot and preserves broad 4H/1D waves for every asset', () => {
   const timeframeMs = { '1h': HOUR, '4h': 4 * HOUR, '1d': 24 * HOUR }
   const baseBySymbol = {
     BTCUSD: 80000,
@@ -398,6 +435,11 @@ test('backward active-wave reconstruction uses the latest opposite pivot for eve
       candles[0] = { time: START, open: base + step, high: base + step * 2, low: base + step * 1.5, close: base + step * 1.6 }
       candles[1] = { time: START + interval, open: base + step, high: base + step * 1.4, low: base + step, close: base + step * 1.2 }
       candles[3] = { time: START + 3 * interval, open: base + step * 0.9, high: base + step * 1.5, low: base + step * 0.7, close: base + step * 0.9 }
+      // A wider five-candle high hides the later local turn from the old
+      // detector. The active-wave detector must still find the two-candle LH
+      // once price subsequently closes through its preceding local low.
+      candles[5] = { time: START + 5 * interval, open: base, high: base + step * 0.9, low: base - step * 0.2, close: base }
+      candles[8] = { time: START + 8 * interval, open: base, high: base + step * 0.2, low: base - step * 0.4, close: base }
       candles[10] = { time: START + 10 * interval, open: base, high: base + step * 0.8, low: base - step * 0.2, close: base }
       candles[18] = { time: START + 18 * interval, open: base - step * 0.9, high: base - step * 0.7, low: base - step, close: base - step * 1.1 }
       const path = classifyExternalPivotPath([
@@ -408,14 +450,23 @@ test('backward active-wave reconstruction uses the latest opposite pivot for eve
       ], { candles })
 
       assert.equal(path.trend, 'down', `${asset.symbol} ${timeframe.id}`)
-      assert.equal(path.activeRange.high.time, START + 10 * interval, `${asset.symbol} ${timeframe.id}`)
+      const usesNarrowHourWave = timeframe.id === '1h'
+      assert.equal(
+        path.activeRange.high.time,
+        usesNarrowHourWave ? START + 10 * interval : START + 3 * interval,
+        `${asset.symbol} ${timeframe.id}`
+      )
       assert.equal(path.activeRange.low.time, START + 18 * interval, `${asset.symbol} ${timeframe.id}`)
-      assert.equal(path.activeRange.source, 'external-backward-active-wave', `${asset.symbol} ${timeframe.id}`)
+      assert.equal(
+        path.activeRange.source,
+        usesNarrowHourWave ? 'external-backward-active-wave' : 'external-confirmed-directional-wave',
+        `${asset.symbol} ${timeframe.id}`
+      )
     }
   }
 })
 
-test('backward active-wave reconstruction mirrors the latest opposite pivot for every asset and timeframe', () => {
+test('backward active-wave reconstruction mirrors 1H sensitivity while preserving 4H/1D waves for every asset', () => {
   const timeframeMs = { '1h': HOUR, '4h': 4 * HOUR, '1d': 24 * HOUR }
   const baseBySymbol = {
     BTCUSD: 80000,
@@ -442,6 +493,10 @@ test('backward active-wave reconstruction mirrors the latest opposite pivot for 
       candles[0] = { time: START, open: base - step, high: base - step * 1.5, low: base - step * 2, close: base - step * 1.6 }
       candles[1] = { time: START + interval, open: base - step, high: base - step, low: base - step * 1.4, close: base - step * 1.2 }
       candles[3] = { time: START + 3 * interval, open: base - step * 0.9, high: base - step * 0.7, low: base - step * 1.5, close: base - step * 1.3 }
+      // Symmetric case for an HL -> HH leg: the local low is valid after a
+      // later closing break, even though a wider low sits five candles back.
+      candles[5] = { time: START + 5 * interval, open: base, high: base + step * 0.2, low: base - step * 0.9, close: base }
+      candles[8] = { time: START + 8 * interval, open: base, high: base + step * 0.4, low: base - step * 0.2, close: base }
       candles[10] = { time: START + 10 * interval, open: base, high: base + step * 0.2, low: base - step * 0.8, close: base }
       candles[18] = { time: START + 18 * interval, open: base + step * 0.9, high: base + step, low: base + step * 0.7, close: base + step * 1.1 }
       const path = classifyExternalPivotPath([
@@ -452,9 +507,18 @@ test('backward active-wave reconstruction mirrors the latest opposite pivot for 
       ], { candles })
 
       assert.equal(path.trend, 'up', `${asset.symbol} ${timeframe.id}`)
-      assert.equal(path.activeRange.low.time, START + 10 * interval, `${asset.symbol} ${timeframe.id}`)
+      const usesNarrowHourWave = timeframe.id === '1h'
+      assert.equal(
+        path.activeRange.low.time,
+        usesNarrowHourWave ? START + 10 * interval : START + 3 * interval,
+        `${asset.symbol} ${timeframe.id}`
+      )
       assert.equal(path.activeRange.high.time, START + 18 * interval, `${asset.symbol} ${timeframe.id}`)
-      assert.equal(path.activeRange.source, 'external-backward-active-wave', `${asset.symbol} ${timeframe.id}`)
+      assert.equal(
+        path.activeRange.source,
+        usesNarrowHourWave ? 'external-backward-active-wave' : 'external-confirmed-directional-wave',
+        `${asset.symbol} ${timeframe.id}`
+      )
     }
   }
 })

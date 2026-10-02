@@ -17,3 +17,12 @@ test('the Raspberry Pi timer runs the canonical deployed runtime, not a nested c
   assert.match(service, /WorkingDirectory=\/home\/openclaw2\/.local\/lib\/btc-bot/)
   assert.doesNotMatch(service, /btc-bot\/btc-bot/)
 })
+
+test('the Raspberry Pi resolves the same dashboard key as the web deploy', () => {
+  assert.match(workflow, /name: Resolve the dashboard key for the primary runner/)
+  assert.match(workflow, /BTC_BOT_KEY: \$\{\{ secrets\.BTC_BOT_KEY \}\}/)
+  assert.match(workflow, /BTCDCA_FTP_PASSWORD: \$\{\{ secrets\.BTCDCA_FTP_PASSWORD \}\}/)
+  assert.match(workflow, /BOT_API_KEY="\$BOT_API_KEY" python3/)
+  assert.match(workflow, /updated\.append\(f"BOT_API_KEY=\{key\}"\)/)
+  assert.doesNotMatch(workflow, /BOT_API_KEY=ahoj1234567890/)
+})
