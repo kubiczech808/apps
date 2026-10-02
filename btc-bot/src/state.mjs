@@ -12,6 +12,7 @@ import { DEFAULT_PRICE_ACTION_STRUCTURE } from './strategy-price-action-structur
 
 export const STATE_VERSION = 1
 export const MAX_RUNS = 200
+export const MAX_RUN_PRICE_ACTION_EXECUTIONS = 48
 export const MAX_EQUITY_POINTS = 2000
 export const MAX_CLOSED_TRADES = 500
 export const MAX_PRICE_ACTION_EVENTS = 200
@@ -139,8 +140,38 @@ export const computeStats = (closedTrades, { startEquitySats = null } = {}) => {
   }
 }
 
+const compactRunAction = (outcome) => {
+  if (!outcome || typeof outcome !== 'object') return outcome
+  const record = outcome.order ?? outcome.trade ?? outcome.position ?? {}
+  const summary = {
+    action: outcome.action,
+    reason: outcome.reason,
+    id: outcome.id ?? record.id,
+    assetSymbol: outcome.assetSymbol ?? record.assetSymbol,
+    timeframeId: outcome.timeframeId ?? record.timeframeId,
+    side: outcome.side ?? record.side,
+    at: outcome.at,
+  }
+  return Object.fromEntries(Object.entries(summary).filter(([, value]) => value != null && value !== ''))
+}
+
+// Runs are a dashboard log, not a second copy of every complete order plan.
+// Keeping the concise execution facts makes the log useful while preventing a
+// 24-profile scan from duplicating its entire matrix hundreds of times.
+export const compactRun = (run = {}) => {
+  const compact = { ...run }
+  if (Array.isArray(run.priceActionExecutions)) {
+    compact.priceActionExecutions = run.priceActionExecutions
+      .slice(0, MAX_RUN_PRICE_ACTION_EXECUTIONS)
+      .map(compactRunAction)
+  }
+  if (Array.isArray(run.brackets)) compact.brackets = run.brackets.map(compactRunAction)
+  if (Array.isArray(run.commands)) compact.commands = run.commands.map(compactRunAction)
+  return compact
+}
+
 export const recordRun = (state, run) => {
-  state.runs = [{ ...run }, ...(state.runs ?? [])].slice(0, MAX_RUNS)
+  state.runs = [compactRun(run), ...(state.runs ?? []).map(compactRun)].slice(0, MAX_RUNS)
   return state
 }
 
