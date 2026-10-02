@@ -26,6 +26,7 @@ import { join } from "node:path";
 const { plannedDispatches } = await import("../tools/dispatch-after-scan.mjs");
 const PACER = readFileSync(new URL("../../.github/workflows/trading-pacer.yml", import.meta.url), "utf8");
 const DISPATCHER = readFileSync(new URL("../tools/dispatch-after-scan.mjs", import.meta.url), "utf8");
+const LIVE_EXECUTOR = readFileSync(new URL("../../.github/workflows/polymarket-live-limit-order-test.yml", import.meta.url), "utf8");
 
 // The pacer decides which ticks scan with a handful of lines of shell. They are cut out of
 // the workflow and RUN, for every tick of an hour, rather than read: an off-by-one here
@@ -136,6 +137,16 @@ test("the live-only tick wakes the live portfolios and nothing else", () => {
   }
   assert.equal(live[2].inputs.live_portfolio_id, "live70",
     "a created portfolio must still write its own state rather than the shared account's");
+});
+
+test("each live execution run states the portfolio and state file it actually used", () => {
+  // A custom live portfolio can share the runner and workflow with another one. The
+  // browser has to be able to prove which portfolio a completed run belonged to; otherwise
+  // a healthy Dota pass is indistinguishable from a missing Counter-Strike pass.
+  assert.match(LIVE_EXECUTOR, /Live portfolio: \$\{LIVE_PORTFOLIO_NAME:-\$\{LIVE_PORTFOLIO_ID\}\}/);
+  assert.match(LIVE_EXECUTOR, /Live execution state: \$\{LIVE_EXECUTION_STATE_PATH\}/);
+  assert.match(LIVE_EXECUTOR, /print\(f"portfolio\s+: \{state\.get\('portfolioId'\) or os\.environ\.get\('LIVE_PORTFOLIO_ID'\)\}"\)/);
+  assert.match(LIVE_EXECUTOR, /print\(f"state file\s+: \{os\.environ\.get\('LIVE_EXECUTION_STATE_PATH'\)\}"\)/);
 });
 
 test("the production scheduler rotates one live executor per tick", () => {

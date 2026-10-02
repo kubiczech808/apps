@@ -311,6 +311,8 @@ jobs:
 
       - name: Show effective live execution settings
         run: |
+          echo "Live portfolio: ${LIVE_PORTFOLIO_NAME:-${LIVE_PORTFOLIO_ID}}"
+          echo "Live execution state: ${LIVE_EXECUTION_STATE_PATH}"
           echo "Live execution trigger: ${LIVE_EXECUTION_TRIGGER}"
           echo "Live selection order: ${LIVE_SELECTION_ORDER}"
 
@@ -527,6 +529,8 @@ jobs:
               return parsed.astimezone(ZoneInfo("Europe/Prague")).strftime("%d. %m. %Y %H:%M")
 
           print("=== RUN DIGEST ===")
+          print(f"portfolio   : {state.get('portfolioId') or os.environ.get('LIVE_PORTFOLIO_ID')}")
+          print(f"state file  : {os.environ.get('LIVE_EXECUTION_STATE_PATH')}")
           print(f"generatedAt : {state.get('generatedAt')} (dashboard {dashboard_time(state.get('generatedAt'))})")
           print(f"action      : {state.get('action')}")
           print(f"reason      : {state.get('reason')}")

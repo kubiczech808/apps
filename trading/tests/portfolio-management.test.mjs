@@ -196,6 +196,16 @@ test("dashboard: portfolio labels never render before the saved configuration is
     "a completed config request must unlock later dashboard refreshes");
 });
 
+test("live run log: a fetched custom-portfolio execution state becomes the visible state", () => {
+  const loader = extractFunction(APP, "ensureLiveExecutionState");
+  assert.match(loader, /state\.liveExecutionByMode\[executionMode\] = execution;/,
+    "the fetched execution state must remain keyed by portfolio");
+  assert.match(loader, /state\.liveExecutionState = execution;/,
+    "the selected portfolio's run-log renderer must receive the fetched execution state");
+  assert.match(loader, /normalizeMode\(state\.mode\) === executionMode/,
+    "a late response must not overwrite a different portfolio after the user switches tabs");
+});
+
 test("trade analysis: entry probability is broken down by whole percentage point", () => {
   const band = new Function(`${extractFunction(APP, "portfolioAnalysisProbability")}
     ${extractFunction(APP, "portfolioAnalysisProbabilityBand")}

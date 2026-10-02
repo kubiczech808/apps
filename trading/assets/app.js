@@ -10924,6 +10924,10 @@ async function ensureLiveExecutionState(mode = state.mode) {
       rememberLiveExecutionState(executionMode, execution);
       if (executionMode === "live-5050") state.live5050ExecutionState = execution;
       if (isLiveMode() && normalizeMode(state.mode) === executionMode && state.liveState) {
+        // The map preserves each portfolio's independent result, but every visible live
+        // panel reads this selected-state pointer. Leaving it on the pre-fetch null value
+        // made a successful request still render "no runs recorded yet".
+        state.liveExecutionState = execution;
         renderLiveState(state.liveState);
       }
       return execution;
