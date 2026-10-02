@@ -1720,6 +1720,14 @@ test("run log history: the workflow archives every portfolio's new runs, and the
   assert.match(APP, /loadPortfolioRunLogHistory\(strategyId\);/);
 });
 
+test("run log history: an empty database window falls back to the portfolio archive", () => {
+  const records = extractFunction(API, "portfolio_run_log_records");
+  assert.match(records, /if \(\$byRunAt === \[\]\) \{[\s\S]*?portfolio-run-log\/\{\$safeId\}/,
+    "a portfolio whose asynchronous database mirror has not caught up must still show its durable archive");
+  assert.doesNotMatch(records, /if \(!trading_storage_is_active\(\)\)/,
+    "database mode must not suppress the archive fallback after a complete database miss");
+});
+
 test("run log history: a Unicode line-boundary character inside a record does not corrupt the archive", () => {
   // Reported live: the workflow's "Append portfolio run-log history entries" step crashed
   // with json.decoder.JSONDecodeError: Unterminated string. splitlines() treats far more

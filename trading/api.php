@@ -3297,7 +3297,12 @@ function portfolio_run_log_records(string $strategyId, array $fallback = []): ar
         }
     }
     $safeId = preg_replace('/[^a-zA-Z0-9_-]/', '', $strategyId);
-    if (!trading_storage_is_active()) {
+    // The database keeps only the retained operational window. Its asynchronous mirror
+    // can legitimately lag a newly created portfolio, while the runner has already
+    // appended its durable NDJSON record. Fall back only on a complete database miss:
+    // normal requests stay a single indexed query and an empty run log never hides a
+    // portfolio's real history just because the mirror has not caught up yet.
+    if ($byRunAt === []) {
         $archiveFiles = $safeId === '' ? [] : (glob(__DIR__ . "/data/portfolio-run-log/{$safeId}/*.ndjson") ?: []);
         sort($archiveFiles, SORT_STRING);
         foreach ($archiveFiles as $archiveFile) {
