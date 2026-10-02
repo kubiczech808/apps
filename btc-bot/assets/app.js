@@ -1479,12 +1479,28 @@ const pnlPercent = (pnlUsd, startingCapitalUsd) =>
     ? (pnlUsd / startingCapitalUsd) * 100
     : null
 
+const allocatedCapitalFor = (item) => {
+  const storedCapital = Number(item?.capitalUsd)
+  const originalCapital = Number.isFinite(storedCapital)
+    ? storedCapital
+    : usdFromSats(item?.marginSats, item?.quoteSatsPerUsd)
+  const notional = Number(item?.quantityUsd)
+  const remainingNotional = Number(item?.remainingQuantityUsd)
+  const openFraction = Number.isFinite(notional) && notional > 0 && Number.isFinite(remainingNotional)
+    ? Math.min(1, Math.max(0, remainingNotional / notional))
+    : 1
+  return Number.isFinite(originalCapital) ? originalCapital * openFraction : null
+}
+
 const renderPortfolioTiles = (box, { strategyId = null } = {}) => {
   const account = state.account || {}
   const accountStats = state.stats || {}
   const market = state.market || {}
   const running = (state.positions?.running || []).filter((position) => !strategyId || position.strategyId === strategyId)
   const closed = (state.positions?.closed || []).filter((trade) => !strategyId || trade.strategyId === strategyId)
+  const entryOrders = (state.positions?.orders || []).filter((order) =>
+    order.orderRole !== 'take-profit' && (!strategyId || order.strategyId === strategyId)
+  )
   const stats = strategyId ? realizedStatsForTrades(closed) : accountStats
 
   // The capital delta and both P/L tiles use the same visible scope, so their
@@ -1496,35 +1512,30 @@ const renderPortfolioTiles = (box, { strategyId = null } = {}) => {
     : null
   const benchmark = capitalBenchmark({ account, market, stats: accountStats, pnlDeltaUsd })
   const equityUsd = benchmark.equityUsd
+  const allocatedCapitalUsd = [...running, ...entryOrders]
+    .reduce((sum, item) => sum + (allocatedCapitalFor(item) ?? 0), 0)
+  const availableCapitalUsd = Number.isFinite(equityUsd)
+    ? Math.max(0, equityUsd - allocatedCapitalUsd)
+    : null
   const capitalDelta = signedUsd(benchmark.usdDelta)
   const usdReturn = signedPct(benchmark.usdReturnPct)
   const capitalChange = Number.isFinite(benchmark.usdDelta) && Number.isFinite(benchmark.usdReturnPct)
     ? `nominálně ${capitalDelta.text} · ${usdReturn.text} oproti startu`
     : 'počáteční hodnota není dostupná'
 
-  const openRisk = running.reduce((sum, position) => {
-    if (!Number.isFinite(position.entry) || !Number.isFinite(position.stopLoss)) return sum
-    if (position.pricingModel === 'linear-usd') return sum + (Number(position.plan?.riskSats) || 0)
-    const perUsd = Math.abs(1 / position.stopLoss - 1 / position.entry)
-    return sum + (position.quantityUsd || 0) * SATS_PER_BTC * perUsd
-  }, 0)
-
   const unrealizedReturn = signedPct(pnlPercent(unrealizedPnlUsd, benchmark.startingCapitalUsd))
   const realizedReturn = signedPct(pnlPercent(realizedPnlUsd, benchmark.startingCapitalUsd))
+  const winRate = pct(stats.winRate, 1)
+  const tradeCount = `${Number.isFinite(Number(stats.wins)) ? Number(stats.wins) : 0} úspěšných / ${Number.isFinite(Number(stats.trades)) ? Number(stats.trades) : 0} celkem`
 
   box.append(
     tile('Kapitál', usd(equityUsd), capitalChange),
     tile(
-      'Výkon od startu',
-      Number.isFinite(benchmark.usdReturnPct) ? usdReturn.text : '–',
-      `${stats.trades || 0} obchodů`,
-      usdReturn.className
+      'Win rate',
+      winRate,
+      tradeCount
     ),
-    tile(
-      'Otevřené riziko',
-      running.length ? usd(usdFromSats(openRisk)) : '$0,00',
-      `${running.length} ${running.length === 1 ? 'pozice' : 'pozic'} v trhu`
-    ),
+    tile('Alokovaný kapitál', usd(allocatedCapitalUsd), `volno ${usd(availableCapitalUsd)}`),
     tile('Nerealizované P/L', signedUsd(unrealizedPnlUsd).text, unrealizedReturn.text, signedUsd(unrealizedPnlUsd).className),
     tile(
       strategyId ? 'Realizované P/L PA-1' : 'Realizované P/L',
@@ -2689,7 +2700,7 @@ const positionCapitalCell = (position) => {
   const openFraction = Number.isFinite(notional) && notional > 0 && Number.isFinite(remainingNotional)
     ? Math.min(1, Math.max(0, remainingNotional / notional))
     : 1
-  const investedValue = Number.isFinite(originalCapital) ? originalCapital * openFraction : null
+  const investedValue = allocatedCapitalFor(position)
   const invested = usd(investedValue)
   const partialExitDetail = openFraction < 0.999
     ? `původně vloženo ${usd(originalCapital)}`
