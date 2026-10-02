@@ -313,6 +313,23 @@ test('equity counts margin posted by isolated trades, which v3 does not aggregat
   assert.equal(account.equitySats, 105_000)
 })
 
+test('a running LN Markets trade is not published twice as an open allocation', async () => {
+  const executor = createLnMarketsExecutor({
+    client: stubClient({
+      getOpenTrades: async () => ({
+        data: [
+          { id: 'R1', margin: 5_000, running: true, side: 'buy' },
+          { id: 'O1', margin: 2_000, running: false, side: 'sell', type: 'limit' },
+        ],
+      }),
+    }),
+    logger: silent,
+  })
+  const trades = await executor.listTrades()
+  assert.deepEqual(trades.running.map((trade) => trade.id), ['R1'])
+  assert.deepEqual(trades.open.map((trade) => trade.id), ['O1'])
+})
+
 test('closed trades are read out of the paginated envelope', async () => {
   const executor = createLnMarketsExecutor({
     client: stubClient({

@@ -1489,7 +1489,29 @@ const allocatedCapitalFor = (item) => {
   const openFraction = Number.isFinite(notional) && notional > 0 && Number.isFinite(remainingNotional)
     ? Math.min(1, Math.max(0, remainingNotional / notional))
     : 1
-  return Number.isFinite(originalCapital) ? originalCapital * openFraction : null
+  return Number.isFinite(originalCapital) ? Math.max(0, originalCapital * openFraction) : null
+}
+
+const activeAllocationStatuses = new Set(['open', 'pending', 'new', 'created', 'partially_filled', 'running'])
+
+const isActiveAllocationItem = (item) => {
+  if (!item || item.orderRole === 'take-profit') return false
+  const status = String(item.status ?? '').trim().toLowerCase()
+  return !status || activeAllocationStatuses.has(status)
+}
+
+const allocationIdentity = (item) =>
+  item?.signalKey || item?.id || [item?.assetSymbol, item?.timeframeId, item?.side, item?.entry].join('|')
+
+const uniqueAllocationItems = (items) => {
+  const seen = new Set()
+  return items.filter((item) => {
+    if (!isActiveAllocationItem(item)) return false
+    const identity = allocationIdentity(item)
+    if (seen.has(identity)) return false
+    seen.add(identity)
+    return true
+  })
 }
 
 const renderPortfolioTiles = (box, { strategyId = null } = {}) => {
@@ -1498,8 +1520,9 @@ const renderPortfolioTiles = (box, { strategyId = null } = {}) => {
   const market = state.market || {}
   const running = (state.positions?.running || []).filter((position) => !strategyId || position.strategyId === strategyId)
   const closed = (state.positions?.closed || []).filter((trade) => !strategyId || trade.strategyId === strategyId)
+  const runningIds = new Set(running.map((position) => position.id).filter(Boolean))
   const entryOrders = (state.positions?.orders || []).filter((order) =>
-    order.orderRole !== 'take-profit' && (!strategyId || order.strategyId === strategyId)
+    !runningIds.has(order.id) && (!strategyId || order.strategyId === strategyId)
   )
   const stats = strategyId ? realizedStatsForTrades(closed) : accountStats
 
@@ -1512,8 +1535,13 @@ const renderPortfolioTiles = (box, { strategyId = null } = {}) => {
     : null
   const benchmark = capitalBenchmark({ account, market, stats: accountStats, pnlDeltaUsd })
   const equityUsd = benchmark.equityUsd
-  const allocatedCapitalUsd = [...running, ...entryOrders]
+  const requestedAllocatedCapitalUsd = uniqueAllocationItems([...running, ...entryOrders])
     .reduce((sum, item) => sum + (allocatedCapitalFor(item) ?? 0), 0)
+  // Corrupted or duplicated historical rows must not make the dashboard claim
+  // that more capital is allocated than the account actually owns.
+  const allocatedCapitalUsd = Number.isFinite(equityUsd)
+    ? Math.min(equityUsd, requestedAllocatedCapitalUsd)
+    : requestedAllocatedCapitalUsd
   const availableCapitalUsd = Number.isFinite(equityUsd)
     ? Math.max(0, equityUsd - allocatedCapitalUsd)
     : null

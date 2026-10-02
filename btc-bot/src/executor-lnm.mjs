@@ -70,14 +70,22 @@ const asArray = (payload) => {
 
 export const createLnMarketsExecutor = ({ client, logger = console, closedLimit = 100 }) => {
   const listTrades = async () => {
-    const [running, open, closed] = await Promise.all([
+    const [runningPayload, openPayload, closed] = await Promise.all([
       client.getRunningTrades(),
       client.getOpenTrades(),
       client.getClosedTrades({ limit: closedLimit }),
     ])
+    const running = asArray(runningPayload).map(normaliseTrade)
+    const runningIds = new Set(running.map((trade) => trade.id).filter(Boolean))
+    // LN Markets can expose a running isolated trade from both endpoints.
+    // Keep it in `running`, where the dashboard treats it as a position, and
+    // remove the duplicate from the pending/open collection before publishing.
+    const open = asArray(openPayload)
+      .map(normaliseTrade)
+      .filter((trade) => !runningIds.has(trade.id))
     return {
-      running: asArray(running).map(normaliseTrade),
-      open: asArray(open).map(normaliseTrade),
+      running,
+      open,
       closed: asArray(closed).map(normaliseTrade),
     }
   }
