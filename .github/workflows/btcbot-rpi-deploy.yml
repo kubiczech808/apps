@@ -358,3 +358,36 @@ jobs:
             process.exitCode = 1
           })
           NODE
+
+      # `store.save()` deliberately keeps a local post-mortem cache when the
+      # hosting rejects a publish. Surface the relevant journal lines after a
+      # failed verification so an authentication or lease mismatch can be
+      # repaired from the deployment run without exposing credentials.
+      - name: Diagnose rejected dashboard publication
+        if: failure()
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo journalctl -u btc-bot.service -n 180 --no-pager | \
+            grep -E 'State was not published|api\.php (publish|lease) HTTP|Runner has not acquired|Pass failed|another runner holds the lease' || true
+          sudo -u openclaw2 -H node - <<'NODE'
+          const crypto = require('node:crypto')
+          const fs = require('node:fs')
+
+          const env = Object.fromEntries(
+            fs.readFileSync('/home/openclaw2/.config/btc-bot.env', 'utf8')
+              .split(/\r?\n/)
+              .filter((line) => line && !line.startsWith('#'))
+              .map((line) => {
+                const separator = line.indexOf('=')
+                return [line.slice(0, separator), line.slice(separator + 1)]
+              })
+          )
+          const key = env.BOT_API_KEY || ''
+          console.log({
+            apiUrl: env.BOT_API_URL || null,
+            runner: env.BOT_RUNNER || null,
+            keyConfigured: Boolean(key),
+            keyFingerprint: key ? crypto.createHash('sha256').update(key).digest('hex').slice(0, 12) : null,
+          })
+          NODE

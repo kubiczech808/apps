@@ -26,3 +26,11 @@ test('the Raspberry Pi resolves the same dashboard key as the web deploy', () =>
   assert.match(workflow, /updated\.append\(f"BOT_API_KEY=\{key\}"\)/)
   assert.doesNotMatch(workflow, /BOT_API_KEY=ahoj1234567890/)
 })
+
+test('a rejected Pi publication exposes only safe operational diagnostics', () => {
+  assert.match(workflow, /name: Diagnose rejected dashboard publication/)
+  assert.match(workflow, /if: failure\(\)/)
+  assert.match(workflow, /State was not published\|api\\\.php \(publish\|lease\) HTTP/)
+  assert.match(workflow, /keyFingerprint/)
+  assert.doesNotMatch(workflow, /console\.log\(\{[\s\S]*apiKey/)
+})
