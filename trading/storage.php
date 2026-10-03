@@ -3757,6 +3757,12 @@ function trading_storage_observations_upsert(array $items): int
         throw new RuntimeException('Trading MySQL storage is unavailable.');
     }
     trading_storage_bootstrap($pdo);
+    if (trading_storage_observation_cutover_gated($pdo)) {
+        // The core JSON state is already persisted by the caller and the next scan mirrors
+        // the current catalogue again. Keep a verified source/shadow pair unchanged while
+        // the one-time metadata swap waits for earlier writer transactions to drain.
+        return 0;
+    }
     if (trading_storage_observations_are_compact($pdo)) {
         return trading_storage_compact_observations_upsert($pdo, $items);
     }
@@ -3897,6 +3903,41 @@ function trading_storage_compact_observations_upsert(PDO $pdo, array $items, str
         throw $error;
     }
     return $count;
+}
+
+/**
+ * A compact-table rename needs an exclusive metadata lock. The market scanner normally
+ * writes short batches, but one batch that began just before the rename can hold that lock
+ * long enough for shared hosting to time out. This short, expiring gate lets in-flight
+ * batches finish and tells new mirror writes to leave the verified table pair alone.
+ */
+function trading_storage_observation_cutover_gated(PDO $pdo): bool
+{
+    $statement = $pdo->prepare(
+        'SELECT meta_value FROM trading_storage_meta WHERE meta_key = :key LIMIT 1'
+    );
+    $statement->execute(['key' => 'observation-compact-cutover-gate-until']);
+    $until = strtotime((string) ($statement->fetchColumn() ?: ''));
+    return $until !== false && $until > time();
+}
+
+function trading_storage_set_observation_cutover_gate(PDO $pdo, int $seconds): void
+{
+    $statement = $pdo->prepare(
+        'INSERT INTO trading_storage_meta (meta_key, meta_value, updated_at) VALUES (:key, :value, :now)
+         ON DUPLICATE KEY UPDATE meta_value = VALUES(meta_value), updated_at = VALUES(updated_at)'
+    );
+    $statement->execute([
+        'key' => 'observation-compact-cutover-gate-until',
+        'value' => gmdate('c', time() + max(1, $seconds)),
+        'now' => trading_storage_now(),
+    ]);
+}
+
+function trading_storage_clear_observation_cutover_gate(PDO $pdo): void
+{
+    $statement = $pdo->prepare('DELETE FROM trading_storage_meta WHERE meta_key = :key');
+    $statement->execute(['key' => 'observation-compact-cutover-gate-until']);
 }
 
 function trading_storage_table_exists(PDO $pdo, string $table): bool
@@ -4046,54 +4087,67 @@ function trading_storage_compact_observations_migration_verify(PDO $pdo): array
 
 function trading_storage_compact_observations_activate(PDO $pdo): array
 {
-    $verification = trading_storage_compact_observations_migration_verify($pdo);
-    if (!($verification['verified'] ?? false)) {
-        throw new RuntimeException('Compact observation migration is not verified: ' . trading_storage_encode($verification));
-    }
-    if (($verification['alreadyCompact'] ?? false) === true) {
-        return ['activated' => false, 'alreadyCompact' => true] + $verification;
-    }
-    $retired = 'trading_observations_payload_retired';
-    // A leftover source table means an earlier cutover needs human inspection. Keeping it is
-    // cheap compared with accidentally discarding the only copy of the old observations.
-    if (trading_storage_table_exists($pdo, $retired)) {
-        throw new RuntimeException('A retired payload table already exists; refusing a second compact cutover.');
-    }
-    // A busy dashboard must not make this request hold an HTTP worker indefinitely. A failed
-    // lock acquisition leaves both tables untouched, and the caller retries the whole safe
-    // activation instead of guessing about a partially completed rename.
+    // New scans now pause only their SQL mirror write. The JSON state remains authoritative
+    // while SQL reads are off, and every later scan re-mirrors the full current catalogue.
+    // This gives the final rename a quiet table pair without risking source data.
+    trading_storage_set_observation_cutover_gate($pdo, 90);
     try {
-        $pdo->exec('SET SESSION lock_wait_timeout = 20');
-    } catch (Throwable) {
-        // Some managed MariaDB plans do not permit session lock changes; the atomic rename is
-        // still safe there, it may only wait for the server default.
+        usleep(8000000);
+        // Verify after the gate as well as before it: no source/shadow difference can be
+        // hidden behind an in-flight scanner that finished during the grace period.
+        $verification = trading_storage_compact_observations_migration_verify($pdo);
+        if (!($verification['verified'] ?? false)) {
+            throw new RuntimeException('Compact observation migration is not verified: ' . trading_storage_encode($verification));
+        }
+        if (($verification['alreadyCompact'] ?? false) === true) {
+            return ['activated' => false, 'alreadyCompact' => true] + $verification;
+        }
+        $retired = 'trading_observations_payload_retired';
+        // A leftover source table means an earlier cutover needs human inspection. Keeping it is
+        // cheap compared with accidentally discarding the only copy of the old observations.
+        if (trading_storage_table_exists($pdo, $retired)) {
+            throw new RuntimeException('A retired payload table already exists; refusing a second compact cutover.');
+        }
+        // A busy dashboard must not make this request hold an HTTP worker indefinitely. A failed
+        // lock acquisition leaves both tables untouched, and the caller retries the whole safe
+        // activation instead of guessing about a partially completed rename.
+        try {
+            $pdo->exec('SET SESSION lock_wait_timeout = 20');
+        } catch (Throwable) {
+            // Some managed MariaDB plans do not permit session lock changes; the atomic rename is
+            // still safe there, it may only wait for the server default.
+        }
+        // Rename is metadata-only and atomic. The shadow received live writes throughout copy,
+        // and the gate holds fresh mirror writes after the final verification.
+        $pdo->exec('RENAME TABLE trading_observations TO `' . $retired . '`, trading_observations_compact TO trading_observations');
+        trading_storage_forget_observation_schema($pdo);
+        $post = $pdo->query(
+            'SELECT COUNT(*) AS rows_total, SUM(lifecycle = "SCRAPED") AS scraped, SUM(lifecycle = "RESOLVED") AS resolved
+             FROM trading_observations'
+        )->fetch(PDO::FETCH_ASSOC) ?: [];
+        $source = $verification['source'] ?? [];
+        $postMatchesSource = (int) ($post['rows_total'] ?? -1) === (int) ($source['rows_total'] ?? -2)
+            && (int) ($post['scraped'] ?? -1) === (int) ($source['scraped'] ?? -2)
+            && (int) ($post['resolved'] ?? -1) === (int) ($source['resolved'] ?? -2);
+        if (!$postMatchesSource) {
+            throw new RuntimeException('Compact observation cutover verification failed; retained payload table is still available.');
+        }
+        $pdo->exec('DROP TABLE `' . $retired . '`');
+        trading_storage_meta_put('observation-compact-migration', json_encode([
+            'activatedAt' => gmdate('c'),
+            'payloadStored' => false,
+            'verification' => $verification,
+        ], JSON_UNESCAPED_SLASHES));
+        return [
+            'activated' => true,
+            'payloadTableDropped' => true,
+            'postCutover' => array_map('intval', $post),
+        ];
+    } finally {
+        // A failed cutover must never leave the mirror paused. Its source stays intact and
+        // the next scan is permitted to resume both the normal table and the shadow write.
+        trading_storage_clear_observation_cutover_gate($pdo);
     }
-    // Rename is metadata-only and atomic. The shadow received live writes throughout copy,
-    // so there is no gap where an ingest can be lost between verification and cutover.
-    $pdo->exec('RENAME TABLE trading_observations TO `' . $retired . '`, trading_observations_compact TO trading_observations');
-    trading_storage_forget_observation_schema($pdo);
-    $post = $pdo->query(
-        'SELECT COUNT(*) AS rows_total, SUM(lifecycle = "SCRAPED") AS scraped, SUM(lifecycle = "RESOLVED") AS resolved
-         FROM trading_observations'
-    )->fetch(PDO::FETCH_ASSOC) ?: [];
-    $source = $verification['source'] ?? [];
-    $postMatchesSource = (int) ($post['rows_total'] ?? -1) === (int) ($source['rows_total'] ?? -2)
-        && (int) ($post['scraped'] ?? -1) === (int) ($source['scraped'] ?? -2)
-        && (int) ($post['resolved'] ?? -1) === (int) ($source['resolved'] ?? -2);
-    if (!$postMatchesSource) {
-        throw new RuntimeException('Compact observation cutover verification failed; retained payload table is still available.');
-    }
-    $pdo->exec('DROP TABLE `' . $retired . '`');
-    trading_storage_meta_put('observation-compact-migration', json_encode([
-        'activatedAt' => gmdate('c'),
-        'payloadStored' => false,
-        'verification' => $verification,
-    ], JSON_UNESCAPED_SLASHES));
-    return [
-        'activated' => true,
-        'payloadTableDropped' => true,
-        'postCutover' => array_map('intval', $post),
-    ];
 }
 
 /**

@@ -134,6 +134,15 @@ test("schema rebuild stays opt-in and behind the shared-quota guard", () => {
     "a brief shared-hosting disconnect cannot abandon a verified long-running copy");
   assert.match(body("trading_storage_compact_observations_migration_verify"), /key_sum/,
     "cutover verifies the complete key set without an unbounded cross-table join");
+  const activation = body("trading_storage_compact_observations_activate");
+  assert.match(activation, /trading_storage_set_observation_cutover_gate\(\$pdo, 90\)/,
+    "a short gate lets in-flight scanner writes finish before the atomic rename");
+  assert.match(activation, /trading_storage_compact_observations_migration_verify\(\$pdo\)/,
+    "the pair is reverified after new mirror writes are gated");
+  assert.match(activation, /finally \{\s*\/\/ A failed cutover must never leave the mirror paused/s,
+    "a failed cutover must reopen the SQL mirror");
+  assert.match(body("trading_storage_observations_upsert"), /trading_storage_observation_cutover_gated\(\$pdo\)/,
+    "new scans respect the cutover gate on both legacy and compact schemas");
   assert.match(COMPACT_WORKFLOW, /trading-observation-resolution-maintenance/,
     "archive and remote resolution cannot mutate a source row during the verified swap");
 });
