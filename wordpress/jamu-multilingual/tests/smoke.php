@@ -35,7 +35,7 @@ $_COOKIE['yay_currency_widget'] = '3347';
 $frontend_i18n = new ReflectionMethod(Content::class, 'frontend_i18n_data');
 $frontend_i18n->setAccessible(true);
 $currency_labels = $frontend_i18n->invoke($content_layer);
-if (($currency_labels['exact']['en']['Bank transfer / QR code (-10 Kč)'] ?? '') !== 'Bank transfer / QR code (-10 Kč)'
+if (($currency_labels['exact']['en']['Převodem / QR kódem (-10 Kč)'] ?? '') !== 'Bank transfer / QR code (-10 Kč)'
     || ($currency_labels['exact']['en']['Křestní jméno'] ?? '') !== 'First name') {
     throw new RuntimeException('Checkout labels did not use the selected currency and localized Czech field labels.');
 }
