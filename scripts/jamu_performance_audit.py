@@ -18,6 +18,7 @@ PAGES = {
     'cart_en': 'https://tajemstvijamu.cz/en/cart/',
     'checkout_en': 'https://tajemstvijamu.cz/en/checkout/',
 }
+PRODUCT_ID = '4558'
 
 
 def connect() -> ftplib.FTP:
@@ -91,6 +92,40 @@ def main() -> int:
                         for marker in ('fatal error', 'parse error', 'warning:', 'uncaught')
                     ),
                 }
+
+        # This is a temporary anonymous WooCommerce session only. It creates
+        # no order, no payment and no email, but allows the audit to profile
+        # the exact cart state visitors use after adding a product.
+        cart_session = requests.Session()
+        added = cart_session.post(
+            'https://tajemstvijamu.cz/',
+            params={'wc-ajax': 'add_to_cart'},
+            data={'product_id': PRODUCT_ID, 'quantity': '1'},
+            headers={'User-Agent': 'JAMU performance audit/1.0'},
+            timeout=120,
+        )
+        cart_response = cart_session.get(
+            PAGES['cart_en'],
+            params={'jamu_bridge': 'performance-audit'},
+            headers={
+                'X-JAMU-Bridge': token,
+                'X-JAMU-Performance-Audit': token,
+                'Cache-Control': 'no-cache',
+                'User-Agent': 'JAMU performance audit/1.0',
+            },
+            timeout=120,
+        )
+        try:
+            cart_response.raise_for_status()
+            result['pages']['cart_with_item_en'] = cart_response.json()
+            result['pages']['cart_with_item_en']['add_to_cart_status'] = added.status_code
+        except (requests.RequestException, ValueError) as exc:
+            result['pages']['cart_with_item_en'] = {
+                'audit_error': type(exc).__name__,
+                'add_to_cart_status': added.status_code,
+                'http_status': cart_response.status_code,
+                'body_bytes': len(cart_response.content),
+            }
         output = Path('jamu-content/performance-audit.json')
         output.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')
         print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -109,4 +144,3 @@ def main() -> int:
 
 if __name__ == '__main__':
     raise SystemExit(main())
-

@@ -10,6 +10,13 @@
 
 defined('ABSPATH') || exit;
 
+// SAVEQUERIES is read at query time by wpdb. Enabling it in this short-lived,
+// authenticated MU bridge gives a one-request aggregate only; SQL text and
+// customer data are never returned in the audit payload.
+if (!defined('SAVEQUERIES')) {
+    define('SAVEQUERIES', true);
+}
+
 $jamu_performance_token = (string) ($_SERVER['HTTP_X_JAMU_BRIDGE'] ?? $_SERVER['HTTP_X_JAMU_PERFORMANCE_AUDIT'] ?? '');
 if ($jamu_performance_token === ''
     || !hash_equals('__JAMU_TOKEN_HASH__', hash('sha256', $jamu_performance_token))) {
@@ -30,7 +37,38 @@ if (($_GET['jamu_bridge'] ?? '') === 'performance-audit-probe') {
 
 ob_start();
 
-add_action('shutdown', static function (): void {
+$jamu_plugin_load_started = microtime(true);
+$jamu_plugin_loads = [];
+add_action('plugin_loaded', static function (string $plugin) use (&$jamu_plugin_load_started, &$jamu_plugin_loads): void {
+    $now = microtime(true);
+    $jamu_plugin_loads[] = [
+        'plugin' => basename(dirname($plugin)) . '/' . basename($plugin),
+        'milliseconds' => round(($now - $jamu_plugin_load_started) * 1000, 1),
+    ];
+    $jamu_plugin_load_started = $now;
+}, PHP_INT_MAX);
+
+$jamu_http_started = [];
+$jamu_http_calls = [];
+add_filter('pre_http_request', static function (mixed $preempt, array $args, string $url) use (&$jamu_http_started): mixed {
+    $jamu_http_started[$url] = microtime(true);
+    return $preempt;
+}, PHP_INT_MIN, 3);
+add_action('http_api_debug', static function (mixed $response, string $context, string $class, array $args, string $url) use (&$jamu_http_started, &$jamu_http_calls): void {
+    if ($context !== 'response') {
+        return;
+    }
+    $started = $jamu_http_started[$url] ?? null;
+    $host = (string) wp_parse_url($url, PHP_URL_HOST);
+    $jamu_http_calls[] = [
+        'host' => $host,
+        'milliseconds' => $started ? round((microtime(true) - $started) * 1000, 1) : null,
+        'ok' => !is_wp_error($response),
+    ];
+    unset($jamu_http_started[$url]);
+}, PHP_INT_MAX, 5);
+
+add_action('shutdown', static function () use (&$jamu_plugin_loads, &$jamu_http_calls): void {
     global $wpdb, $wp_scripts, $wp_styles, $wp_object_cache;
 
     $num_queries = isset($wpdb->num_queries) ? (int) $wpdb->num_queries : null;
@@ -76,6 +114,30 @@ add_action('shutdown', static function (): void {
         );
     }
 
+    $query_total_seconds = 0.0;
+    $query_callers = [];
+    foreach ((array) ($wpdb->queries ?? []) as $query) {
+        $seconds = isset($query[1]) ? (float) $query[1] : 0.0;
+        $caller = isset($query[2]) ? (string) $query[2] : 'unknown';
+        $query_total_seconds += $seconds;
+        if (!isset($query_callers[$caller])) {
+            $query_callers[$caller] = ['queries' => 0, 'seconds' => 0.0];
+        }
+        $query_callers[$caller]['queries']++;
+        $query_callers[$caller]['seconds'] += $seconds;
+    }
+    uasort($query_callers, static fn (array $left, array $right): int => $right['seconds'] <=> $left['seconds']);
+    $slow_query_callers = [];
+    foreach (array_slice($query_callers, 0, 12, true) as $caller => $stats) {
+        $slow_query_callers[] = [
+            'caller' => substr($caller, 0, 180),
+            'queries' => $stats['queries'],
+            'milliseconds' => round($stats['seconds'] * 1000, 1),
+        ];
+    }
+    usort($jamu_plugin_loads, static fn (array $left, array $right): int => $right['milliseconds'] <=> $left['milliseconds']);
+    usort($jamu_http_calls, static fn (array $left, array $right): int => ($right['milliseconds'] ?? 0) <=> ($left['milliseconds'] ?? 0));
+
     $htaccess = ABSPATH . '.htaccess';
     $htaccess_contents = is_readable($htaccess) ? (string) file_get_contents($htaccess) : '';
     $payload = [
@@ -108,6 +170,12 @@ add_action('shutdown', static function (): void {
         ],
         'database' => [
             'autoloaded_options_bytes' => $autoload_bytes,
+            'recorded_query_seconds' => round($query_total_seconds, 3),
+            'slow_callers' => $slow_query_callers,
+        ],
+        'runtime' => [
+            'slow_plugin_load_intervals' => array_slice($jamu_plugin_loads, 0, 12),
+            'http_calls' => array_slice($jamu_http_calls, 0, 12),
         ],
     ];
 
@@ -119,4 +187,3 @@ add_action('shutdown', static function (): void {
     echo wp_json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 // Run before WordPress flushes output buffers at shutdown priority 1.
 }, 0);
-
