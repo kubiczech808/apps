@@ -1,0 +1,45 @@
+name: Apply JAMU storefront performance safeguards
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['feat/jamu-multilingual']
+    paths: ['.github/jamu-performance-apply-trigger']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: jamu-storefront-performance-apply
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: jamu-production
+    env:
+      JAMU_FTP_LOGIN: ${{ secrets.JAMU_FTP_LOGIN }}
+      JAMU_FTP_PWD: ${{ secrets.JAMU_FTP_PWD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/jamu-multilingual
+      - run: python -m pip install requests
+      - run: python scripts/jamu_performance_apply.py
+      - name: Save performance apply report
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add jamu-content/performance-apply.json
+          git diff --cached --quiet && exit 0
+          git commit -m 'Apply JAMU storefront performance safeguards'
+          git push origin HEAD:feat/jamu-multilingual
+      - name: Require successful safety verification
+        run: |
+          python - <<'PY'
+          import json
+          result = json.load(open('jamu-content/performance-apply.json', encoding='utf-8'))
+          if not result.get('verification', {}).get('ok'):
+              raise SystemExit('Performance verification did not pass; no further rollout is implied.')
+          PY

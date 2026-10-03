@@ -1,6 +1,7 @@
 <?php
 
 use Jamu\Multilingual\Languages;
+use Jamu\Multilingual\Performance;
 use Jamu\Multilingual\Content;
 use Jamu\Multilingual\Email;
 use Jamu\Multilingual\Identity;
@@ -17,6 +18,13 @@ $languages = new Languages();
 $router = new Router($repository, $languages);
 $languages->set_current('en');
 $content_layer = new Content($repository, $languages, $router);
+
+$performance_layer = new Performance();
+$performance_layer->register();
+$cache_cookies = apply_filters('wpo_cache_cookies', [], []);
+if (!in_array(Performance::CURRENCY_COOKIE, $cache_cookies, true)) {
+    throw new RuntimeException('WP-Optimize page cache did not vary by selected currency.');
+}
 
 $product = new WC_Product_Simple();
 $product->set_name('Český testovací produkt');
