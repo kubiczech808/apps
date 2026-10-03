@@ -3,11 +3,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import random
 import re
 import unicodedata
 import uuid
 from dataclasses import dataclass
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 from zoneinfo import ZoneInfo
@@ -26,12 +27,24 @@ _PRAGUE = ZoneInfo("Europe/Prague")
 _DAILY_LIMIT = 10
 _DEFAULT_DAILY_PROPOSALS = 3
 _DEFAULT_IMMEDIATE_NOTIFICATIONS = False
+_DEFAULT_REACH_RANKING = True
 _MIN_RESPONSES = 3
 _MIN_FOLLOWERS = 100
 _SEARCH_RESULTS_PER_QUERY = 16
 _SEARCH_QUERY_LIMIT = 8
 _PREFILTER_SCORE = 45
 _PREFILTER_FALLBACK_SCORE = 18
+# Reach ranking: among several ELIGIBLE candidates (already past every safety
+# filter above), prefer the one our comment is most likely to be seen under -
+# a fresh article still getting traffic, in a thread that isn't already
+# saturated - instead of just the first one found. This never loosens who is
+# eligible, only which eligible article gets picked.
+_ELIGIBLE_POOL_TARGET = 4
+_FRESH_DAYS_FULL_BONUS = 3
+_FRESH_DAYS_PARTIAL_BONUS = 10
+_FRESH_DAYS_TRACE_BONUS = 30
+_SWEET_SPOT_RESPONSES = (3, 40)
+_CROWDED_RESPONSES = 150
 _SUPPORTED_COMMENT_LANGUAGES = {
     "en": "English",
     "es": "Spanish",
@@ -103,6 +116,31 @@ _DEFAULT_QUERIES = [
     "bitcoin accumulation strategy",
     "bitcoin self custody dca",
 ]
+# Search phrases that do not depend on what we published. The history-derived
+# queries only change when a new article goes out, so with the article pipeline
+# paused every slot searched the same eight phrases, hit the same already
+# rejected articles, and could never reach anyone new.
+_QUERY_POOL = [
+    *_DEFAULT_QUERIES,
+    "bitcoin dca fees",
+    "bitcoin dca taxes",
+    "bitcoin savings plan",
+    "stacking sats every month",
+    "bitcoin cold storage hardware wallet",
+    "bitcoin dca vs lump sum",
+    "bitcoin halving accumulation",
+    "bitcoin utxo management",
+    "bitcoin dca retirement",
+    "bitcoin volatility investing strategy",
+    "bitcoin withdrawal self custody",
+    "bitcoin dca automation",
+    "bitcoin bear market accumulation",
+    "bitcoin treasury strategy",
+    "bitcoin portfolio averaging",
+    "bitcoin buying the dip strategy",
+    "bitcoin long term holding strategy",
+    "bitcoin exchange fees comparison",
+]
 
 
 @dataclass(frozen=True)
@@ -119,6 +157,8 @@ class EngagementOpportunity:
     followers: int
     language: str
     language_label: str
+    age_days: int | None
+    reach_score: int
 
 
 async def run_once(limit: int = 3, query: str | None = None) -> dict:
@@ -154,11 +194,17 @@ async def run_once(limit: int = 3, query: str | None = None) -> dict:
     )
     opportunities: list[EngagementOpportunity] = []
     fallback_candidates: list[dict] = []
+    eligible_pool: list[dict] = []
     rejected: list[dict] = prefilter_rejected[:10] if not candidates else []
     inspected = 0
+    reach_ranking = is_reach_ranking_enabled()
+    # Reach ranking needs a few eligible candidates to choose from, which costs
+    # extra Playwright inspections. Disabled, we stop at the first eligible
+    # candidate exactly like before, for a true before/after comparison.
+    pool_target = max(limit * _ELIGIBLE_POOL_TARGET, _ELIGIBLE_POOL_TARGET) if reach_ranking else limit
 
     for candidate in candidates[: max(limit * 16, 24)]:
-        if len(opportunities) >= limit:
+        if len(eligible_pool) >= pool_target:
             break
         inspected += 1
         try:
@@ -169,6 +215,7 @@ async def run_once(limit: int = 3, query: str | None = None) -> dict:
             continue
 
         candidate["responses"] = int(details.get("responses") or 0)
+        candidate["responses_known"] = bool(details.get("responsesKnown"))
         candidate["followers"] = int(details.get("followers") or 0)
         language_code, language_label = _detect_article_language(
             str(details.get("lang") or ""),
@@ -177,6 +224,10 @@ async def run_once(limit: int = 3, query: str | None = None) -> dict:
         candidate["language"] = language_code or "unknown"
         candidate["language_label"] = language_label
         candidate["author_profile_url"] = details.get("authorProfileUrl") or candidate.get("profile")
+        candidate["age_days"] = _estimate_article_age_days(
+            details.get("textSample") or "", datetime.now(timezone.utc)
+        )
+        candidate["reach_score"] = _reach_score(candidate["score"], candidate["responses"], candidate["age_days"])
 
         eligible, reason = _eligible_article(candidate, details)
         candidate["eligibility_reason"] = reason
@@ -193,11 +244,27 @@ async def run_once(limit: int = 3, query: str | None = None) -> dict:
             })
             continue
 
+        eligible_pool.append(candidate)
+
+    # Among several eligible candidates, prefer the one our comment is most
+    # likely to be seen under instead of just the first one found (see
+    # _reach_score). Disabled, eligible_pool holds at most `limit` items
+    # already in discovery order, so this is a no-op.
+    if reach_ranking:
+        eligible_pool.sort(key=lambda c: c.get("reach_score", 0), reverse=True)
+
+    drafted: list[tuple[dict, str]] = []
+    for candidate in eligible_pool:
+        if len(drafted) >= limit:
+            break
         try:
             comment = await _draft_comment(candidate)
         except Exception as exc:
             log.warning("Medium engagement comment draft failed for %s: %s", candidate.get("url"), exc)
             continue
+        drafted.append((candidate, comment))
+
+    for candidate, comment in drafted:
         opportunities.append(
             EngagementOpportunity(
                 id=str(uuid.uuid4()),
@@ -212,6 +279,8 @@ async def run_once(limit: int = 3, query: str | None = None) -> dict:
                 followers=candidate["followers"],
                 language=candidate["language"],
                 language_label=candidate["language_label"],
+                age_days=candidate.get("age_days"),
+                reach_score=candidate.get("reach_score", candidate.get("score", 0)),
             )
         )
 
@@ -219,8 +288,8 @@ async def run_once(limit: int = 3, query: str | None = None) -> dict:
         fallback_candidates.sort(
             key=lambda item: (
                 int(item.get("followers") or 0),
+                int(item.get("reach_score") or item.get("score") or 0),
                 int(item.get("responses") or 0),
-                int(item.get("score") or 0),
             ),
             reverse=True,
         )
@@ -250,6 +319,8 @@ async def run_once(limit: int = 3, query: str | None = None) -> dict:
                     followers=candidate["followers"],
                     language=candidate["language"],
                     language_label=candidate["language_label"],
+                    age_days=candidate.get("age_days"),
+                    reach_score=candidate.get("reach_score", candidate.get("score", 0)),
                 )
             )
 
@@ -279,6 +350,9 @@ async def prepare_next_opportunity(query: str | None = None) -> dict:
     result = await run_once(limit=1, query=query)
     opportunities = result.get("opportunities") or []
     if not opportunities:
+        state = _read_state(_STATE_FILE)
+        _record_slot_outcome(state, result, prepared=False)
+        _write_state(_STATE_FILE, state)
         return {
             "status": "nothing_found",
             "queries": result.get("queries") or [],
@@ -288,6 +362,7 @@ async def prepare_next_opportunity(query: str | None = None) -> dict:
         }
 
     state = _read_state(_STATE_FILE)
+    _record_slot_outcome(state, result, prepared=True)
     pending = state.setdefault("pending", {})
     op = opportunities[0]
     op["status"] = "pending"
@@ -389,6 +464,21 @@ def is_immediate_notifications_enabled() -> bool:
     return bool(settings.get("immediate_notifications_enabled", _DEFAULT_IMMEDIATE_NOTIFICATIONS))
 
 
+def is_reach_ranking_enabled() -> bool:
+    state = _read_state(_STATE_FILE)
+    settings = state.setdefault("settings", {})
+    return bool(settings.get("reach_ranking_enabled", _DEFAULT_REACH_RANKING))
+
+
+def set_reach_ranking_enabled(enabled: bool) -> dict:
+    state = _read_state(_STATE_FILE)
+    settings = state.setdefault("settings", {})
+    settings["reach_ranking_enabled"] = bool(enabled)
+    settings["reach_ranking_updated_at"] = datetime.now(timezone.utc).isoformat()
+    _write_state(_STATE_FILE, state)
+    return {"status": "ok", "reach_ranking_enabled": bool(enabled)}
+
+
 def set_auto_post_enabled(enabled: bool) -> dict:
     state = _read_state(_STATE_FILE)
     settings = state.setdefault("settings", {})
@@ -448,10 +538,11 @@ def engagement_rules_status() -> dict:
         "max_daily_posts": _DAILY_LIMIT,
         "auto_post_enabled": is_auto_post_enabled(),
         "immediate_notifications_enabled": is_immediate_notifications_enabled(),
+        "reach_ranking_enabled": is_reach_ranking_enabled(),
         "blocked_profiles": len(blocked_profiles),
         "used_profiles_this_week": len(_used_profiles_this_week(state)),
         "pending": pending_count,
-        "queries": _DEFAULT_QUERIES,
+        "queries": rotating_queries()[: _SEARCH_QUERY_LIMIT // 2],
     }
 
 
@@ -461,7 +552,7 @@ def format_engagement_rules_status() -> str:
     notifications = (
         "ON - immediate slot/post updates"
         if rules["immediate_notifications_enabled"]
-        else "OFF - daily summary only, errors still reported"
+        else "OFF - weekly summary only, errors still reported"
     )
     return (
         "Medium engagement rules\n\n"
@@ -480,6 +571,13 @@ def format_engagement_rules_status() -> str:
         f"- Search results per query: {rules['search_results_per_query']}\n"
         f"- Primary topical score: >= {rules['prefilter_score']}\n"
         f"- Fallback inspection score: >= {rules['prefilter_fallback_score']}\n\n"
+        "Reach ranking (trial):\n"
+        f"- Status: {'ON' if rules['reach_ranking_enabled'] else 'OFF'}\n"
+        "- When ON, picks the best-scoring eligible candidate instead of the first one found: "
+        f"a bonus for articles published in the last {_FRESH_DAYS_FULL_BONUS} days (still being actively "
+        f"read/notified), a bonus for a response count in the "
+        f"{_SWEET_SPOT_RESPONSES[0]}-{_SWEET_SPOT_RESPONSES[1]} range (our comment is more likely to be "
+        f"seen, not buried), and a penalty past {_CROWDED_RESPONSES} responses.\n\n"
         "Current schedule/settings:\n"
         f"- Daily proposal slots: {rules['daily_proposals']}\n"
         f"- Hard daily posted-comment cap: {rules['max_daily_posts']}\n"
@@ -489,7 +587,8 @@ def format_engagement_rules_status() -> str:
         f"- Blocked profiles: {rules['blocked_profiles']}\n"
         f"- Profiles already used this week: {rules['used_profiles_this_week']}\n\n"
         "Use /engage_auto <0-10> to change daily slots and /engage_autopost on|off|status "
-        "to change approval mode. Use /engage_notify on|off|status to change immediate Telegram updates."
+        "to change approval mode. Use /engage_notify on|off|status to change immediate Telegram updates. "
+        "Use /engage_reach on|off|status to toggle reach ranking."
     )[:4096]
 
 
@@ -533,8 +632,9 @@ def format_opportunity_message(result: dict) -> str:
         "Medium engagement candidate\n\n"
         f"Title: {op.get('title')}\n"
             f"Profile: {op.get('profile')}\n"
-            f"Score: {op.get('score')} | Query: {op.get('query')}\n"
+            f"Score: {op.get('score')} | Reach score: {op.get('reach_score')} | Query: {op.get('query')}\n"
             f"Responses: {op.get('responses')} | Followers: {op.get('followers')} | "
+            f"Age: {_format_age(op.get('age_days'))}\n"
             f"Language: {op.get('language')} ({op.get('language_label') or 'unknown'})\n"
             f"URL: {op.get('url')}\n\n"
         "Comment draft:\n"
@@ -543,28 +643,158 @@ def format_opportunity_message(result: dict) -> str:
     )[:4096]
 
 
-def format_daily_summary(day: date | None = None) -> str:
-    state = _read_state(_STATE_FILE)
-    day_key = (day or datetime.now(_PRAGUE).date()).isoformat()
-    records = [
-        item for item in state.get("posted", [])
-        if _local_day_key(item.get("posted_at") or item.get("posted_at_local")) == day_key
-    ]
-    if not records:
-        return f"Medium engagement summary {day_key}: no approved comments were posted today."
+_WEEK_DAYS = 7
+_HEARTBEAT_FILE = config.data_dir / "agent_m_heartbeat.json"
+_HEARTBEAT_STALE_HOURS = 36
 
-    lines = [f"Medium engagement summary {day_key}: {len(records)} comment(s) posted"]
-    for idx, item in enumerate(records, 1):
-        when = _local_time_label(item.get("posted_at") or item.get("posted_at_local"))
-        lines.extend(
-            [
-                "",
-                f"{idx}. {when} - {item.get('title')}",
-                f"Profile: {item.get('profile')}",
-                f"URL: {item.get('article_url') or item.get('url')}",
-            ]
+
+def touch_heartbeat(context: str) -> None:
+    """Record that the bot process was alive just now.
+
+    This is what makes the weekly summary a real liveness check rather than
+    just a count of comments: if the process has crashed or a timer stopped
+    firing, the heartbeat goes stale even though nothing else changes.
+    """
+    try:
+        data = json.loads(_HEARTBEAT_FILE.read_text()) if _HEARTBEAT_FILE.exists() else {}
+        if not isinstance(data, dict):
+            data = {}
+    except (OSError, json.JSONDecodeError):
+        data = {}
+    now_iso = datetime.now(timezone.utc).isoformat()
+    if context == "startup" or "started_at" not in data:
+        data["started_at"] = now_iso
+    data["last_seen_at"] = now_iso
+    data["last_seen_context"] = context
+    try:
+        _HEARTBEAT_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _HEARTBEAT_FILE.write_text(json.dumps(data, indent=2))
+    except OSError:
+        log.warning("Medium engagement: could not write heartbeat file")
+
+
+def _read_heartbeat() -> dict:
+    try:
+        data = json.loads(_HEARTBEAT_FILE.read_text())
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _format_heartbeat_line() -> str:
+    heartbeat = _read_heartbeat()
+    if not heartbeat.get("last_seen_at"):
+        return "Agent status: no heartbeat recorded yet (bot may predate this feature)."
+    last_seen = _parse_dt(heartbeat.get("last_seen_at"))
+    age_hours = (datetime.now(timezone.utc) - last_seen).total_seconds() / 3600
+    started = _parse_dt(heartbeat.get("started_at")) if heartbeat.get("started_at") else None
+    started_label = started.astimezone(_PRAGUE).strftime("%Y-%m-%d %H:%M") if started else "unknown"
+    if age_hours < _HEARTBEAT_STALE_HOURS:
+        status = "running"
+    else:
+        status = f"NOT SEEN IN {age_hours:.0f}h - check that the bot process is up"
+    return (
+        f"Agent status: {status}\n"
+        f"Last seen: {last_seen.astimezone(_PRAGUE).strftime('%Y-%m-%d %H:%M')} | "
+        f"running since: {started_label}"
+    )
+
+
+def format_weekly_summary(end_day: date | None = None) -> str:
+    """One report a week, with the diagnostics an empty week would need.
+
+    Replaces the old daily summary: a message every day for a bot that posts
+    at most a handful of comments is noise, not signal. This keeps the one
+    thing daily pings were actually for - proof the agent is alive - while
+    cutting the message count by 7x.
+    """
+    state = _read_state(_STATE_FILE)
+    end = end_day or datetime.now(_PRAGUE).date()
+    day_keys = [(end - timedelta(days=offset)).isoformat() for offset in range(_WEEK_DAYS - 1, -1, -1)]
+    week_label = f"{day_keys[0]} to {day_keys[-1]}"
+
+    posted = [
+        item for item in state.get("posted", [])
+        if _local_day_key(item.get("posted_at") or item.get("posted_at_local")) in day_keys
+    ]
+    slots_by_day = {day: (state.get("slots") or {}).get(day) or [] for day in day_keys}
+    total_slots = sum(len(v) for v in slots_by_day.values())
+    days_with_no_slot = [day for day in day_keys if not slots_by_day[day]]
+
+    lines = [f"Medium engagement weekly summary ({week_label})", _format_heartbeat_line(), ""]
+    lines.append(f"Comments posted this week: {len(posted)} (daily cap: {_DAILY_LIMIT})")
+
+    per_day_counts = {day: 0 for day in day_keys}
+    for item in posted:
+        key = _local_day_key(item.get("posted_at") or item.get("posted_at_local"))
+        per_day_counts[key] = per_day_counts.get(key, 0) + 1
+    lines.append("By day: " + ", ".join(f"{day[5:]}={count}" for day, count in per_day_counts.items()))
+
+    if posted:
+        known_ages = [item.get("age_days") for item in posted if item.get("age_days") is not None]
+        fresh = sum(1 for age in known_ages if age <= _FRESH_DAYS_FULL_BONUS)
+        reach_line = f"Reach: {fresh}/{len(known_ages)} posted on articles <= {_FRESH_DAYS_FULL_BONUS}d old"
+        if known_ages:
+            reach_line += f", average article age {sum(known_ages) / len(known_ages):.1f}d"
+        lines.append(reach_line)
+        lines.append("")
+        lines.append("Posted this week:")
+        for item in posted[-10:]:
+            when = _local_time_label(item.get("posted_at") or item.get("posted_at_local"))
+            day_key = _local_day_key(item.get("posted_at") or item.get("posted_at_local"))
+            lines.append(f"- {day_key} {when}  {str(item.get('title'))[:70]}")
+        if len(posted) > 10:
+            lines.append(f"... and {len(posted) - 10} more")
+
+    found = sum(int(slot.get("candidates_found") or 0) for slots in slots_by_day.values() for slot in slots)
+    inspected = sum(int(slot.get("candidates_inspected") or 0) for slots in slots_by_day.values() for slot in slots)
+    lines.append("")
+    lines.append(f"Slots run: {total_slots} | candidates found/inspected: {found}/{inspected}")
+    if days_with_no_slot:
+        lines.append(
+            f"No slot ran on: {', '.join(day[5:] for day in days_with_no_slot)} "
+            "- worth checking the bot was up on those days."
         )
+
+    counts: dict[str, int] = {}
+    for slots in slots_by_day.values():
+        for slot in slots:
+            for reason in slot.get("reasons") or []:
+                key = re.sub(r"\(.*?\)", "", reason).strip(" :;-") or reason
+                counts[key] = counts.get(key, 0) + 1
+    if counts:
+        lines.append("Top rejection reasons this week:")
+        for reason, count in sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:5]:
+            lines.append(f"- {reason} ({count}x)")
+
+    lines.append("")
+    lines.append("Use /engage_rules for current filters, /engage for a manual run.")
     return "\n".join(lines)[:4096]
+
+
+def _record_slot_outcome(state: dict, result: dict, prepared: bool) -> None:
+    """Remember what a scheduled slot did, so a quiet week can explain itself.
+
+    Without this a run that finds nothing is invisible until someone reads the
+    bot log: immediate notifications are off by default and the weekly summary
+    would otherwise just report a posted-comment count of zero.
+    """
+    slots = state.setdefault("slots", {})
+    entries = slots.setdefault(_today_key(), [])
+    entries.append(
+        {
+            "at": datetime.now(_PRAGUE).strftime("%H:%M"),
+            "status": "prepared" if prepared else str(result.get("status") or "unknown"),
+            "candidates_found": int(result.get("candidates_found") or 0),
+            "candidates_inspected": int(result.get("candidates_inspected") or 0),
+            "reasons": [
+                str(item.get("reason")) for item in (result.get("rejected") or [])[:10]
+                if item.get("reason")
+            ],
+        }
+    )
+    for old_day in sorted(slots)[:-14]:
+        slots.pop(old_day, None)
 
 
 def format_result(result: dict) -> str:
@@ -585,8 +815,9 @@ def format_result(result: dict) -> str:
             [
                 "",
                 f"{idx}. {item.get('title')}",
-                f"Score: {item.get('score')} | Query: {item.get('query')}",
+                f"Score: {item.get('score')} | Reach score: {item.get('reach_score')} | Query: {item.get('query')}",
                 f"Responses: {item.get('responses')} | Followers: {item.get('followers')} | "
+                f"Age: {_format_age(item.get('age_days'))}",
                 f"Language: {item.get('language')} ({item.get('language_label') or 'unknown'})",
                 f"Reason: {item.get('reason')}",
                 f"URL: {item.get('url')}",
@@ -603,17 +834,29 @@ async def _build_queries() -> list[str]:
     recent = await history.get_recent(5)
     available = get_available(used_slugs)
 
-    queries = []
+    from_history = []
     for entry in reversed(recent):
-        queries.append(_query_from_title(entry.title))
+        from_history.append(_query_from_title(entry.title))
         for tag in entry.tags[:2]:
-            queries.append(f"bitcoin {tag.lower()} dca")
+            from_history.append(f"bitcoin {tag.lower()} dca")
 
     for plan in available[:5]:
-        queries.append(plan.seo_keyword)
+        from_history.append(plan.seo_keyword)
 
-    queries.extend(_DEFAULT_QUERIES)
+    # Half the slots go to the rotating pool so the search never stands still
+    # while the article pipeline is paused, half stay tied to what we publish.
+    rotating = rotating_queries()
+    half = max(1, _SEARCH_QUERY_LIMIT // 2)
+    queries = [*rotating[:half], *from_history, *rotating[half:]]
     return _dedupe([q for q in queries if len(q.split()) >= 2])[:_SEARCH_QUERY_LIMIT]
+
+
+def rotating_queries(day: date | None = None) -> list[str]:
+    """Order the evergreen query pool differently each day."""
+    day = day or datetime.now(_PRAGUE).date()
+    pool = list(_QUERY_POOL)
+    random.Random(f"medium-engagement-{day.isoformat()}").shuffle(pool)
+    return pool
 
 
 def _rank_candidates(
@@ -792,6 +1035,12 @@ def _eligible_article(candidate: dict, details: dict) -> tuple[bool, str]:
         return False, f"unsupported or unclear article language (lang={raw_lang})"
     if not _topic_anchor_reason(_article_sample(candidate, details)):
         return False, "not related to Bitcoin/DCA/crypto topic"
+    if not candidate.get("responses_known", True):
+        # Never report an unreadable count as "0 responses" - that reads like a
+        # verdict about the article when it is really a verdict about our
+        # scraper, and it hides a Medium UI change behind a normal-looking
+        # rejection. The follower-based fallback decides these instead.
+        return False, "response count could not be read from the article page"
     if responses < _MIN_RESPONSES:
         return False, f"too few comments/responses ({responses} < {_MIN_RESPONSES})"
     if followers < _MIN_FOLLOWERS:
@@ -822,6 +1071,90 @@ def _article_sample(candidate: dict, details: dict) -> str:
             details.get("textSample") or "",
         ]
     )
+
+
+_MONTH_NAMES = {
+    name: i
+    for i, name in enumerate(
+        ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"],
+        start=1,
+    )
+}
+
+
+def _estimate_article_age_days(text_sample: str, now: datetime) -> int | None:
+    """Best-effort article age from Medium's byline text, e.g. '4d ago' or 'Apr 15, 2026'.
+
+    Used only to break ties among already-eligible candidates (see
+    _reach_score) - a wrong guess costs nothing beyond a slightly worse pick,
+    so this never blocks a candidate and returns None rather than guessing
+    when it finds nothing byline-shaped in the first part of the page.
+    """
+    sample = text_sample[:800]
+
+    relative = re.search(r"\b(\d+)\s*(min|hr|hour|d|day)s?\s*ago\b", sample, re.IGNORECASE)
+    if relative:
+        value = int(relative.group(1))
+        unit = relative.group(2).lower()
+        return 0 if unit.startswith(("min", "hr", "hour")) else value
+
+    absolute = re.search(
+        r"\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{1,2})(?:,\s*(\d{4}))?\b",
+        sample,
+    )
+    if not absolute:
+        return None
+    month = _MONTH_NAMES.get(absolute.group(1)[:3].lower())
+    if not month:
+        return None
+    day = int(absolute.group(2))
+    year = int(absolute.group(3)) if absolute.group(3) else now.year
+    try:
+        published = datetime(year, month, day, tzinfo=timezone.utc)
+    except ValueError:
+        return None
+    if published > now:
+        # No year was printed and this month/day has not happened yet this
+        # year, so the byline must mean last year.
+        try:
+            published = published.replace(year=year - 1)
+        except ValueError:
+            return None
+    return max(0, (now.date() - published.date()).days)
+
+
+def _reach_score(topical_score: int, responses: int, age_days: int | None) -> int:
+    """Rank already-eligible candidates by how likely our comment is to be seen.
+
+    This never decides whether an article is eligible - only which eligible
+    article gets picked. Two things move the needle: whether the article is
+    still being actively read/notified (recent), and whether our comment lands
+    in a thread small enough to stand out instead of being reply #200.
+    """
+    score = topical_score
+    if age_days is not None:
+        if age_days <= _FRESH_DAYS_FULL_BONUS:
+            score += 25
+        elif age_days <= _FRESH_DAYS_PARTIAL_BONUS:
+            score += 12
+        elif age_days <= _FRESH_DAYS_TRACE_BONUS:
+            score += 4
+    low, high = _SWEET_SPOT_RESPONSES
+    if low <= responses <= high:
+        score += 15
+    elif responses > _CROWDED_RESPONSES:
+        score -= 10
+    return score
+
+
+def _format_age(age_days: int | None) -> str:
+    if age_days is None:
+        return "unknown"
+    if age_days <= 0:
+        return "today"
+    if age_days == 1:
+        return "1 day"
+    return f"{age_days} days"
 
 
 def _detect_article_language(lang: str, text: str) -> tuple[str | None, str]:
@@ -1240,8 +1573,6 @@ def _clamp_daily_proposals(count: object) -> int:
 
 def _generate_day_times(day: date, count: int) -> list[datetime]:
     # Spread slots between 07:35 and 20:10 Europe/Prague.
-    import random
-
     start_min = 7 * 60 + 35
     end_min = 20 * 60 + 10
     span = end_min - start_min

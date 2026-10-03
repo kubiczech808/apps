@@ -84,6 +84,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/engage_auto <0-10> — set daily scheduled Medium engagement proposals\n"
         "/engage_autopost on|off|status — post scheduled engagement without approval\n"
         "/engage_notify on|off|status — immediate scheduled engagement Telegram updates\n"
+        "/engage_reach on|off|status — rank eligible candidates by expected reach (trial)\n"
         "/status — token usage & schedule\n"
         "/help — this message\n\n"
         "Slug is optional — without it, the next planned topic is used."
@@ -764,9 +765,38 @@ async def engage_notify_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     enabled = bool(result["immediate_notifications_enabled"])
     await msg.reply_text(
         "Medium engagement notifications\n"
-        f"Status: {'ON - every scheduled slot/post can send an immediate update' if enabled else 'OFF - daily summary only, errors still reported'}\n"
+        f"Status: {'ON - every scheduled slot/post can send an immediate update' if enabled else 'OFF - weekly summary only, errors still reported'}\n"
         f"Scheduled slots per day: {result['daily_proposals']}\n"
         f"Hard daily posting cap: {result['max_daily_posts']}\n"
+        "Use /engage_rules to show the full engagement setup."
+    )
+
+
+@admin_only
+async def engage_reach_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    msg = update.message
+    if not msg:
+        return
+
+    from agent_m.medium_engagement import is_reach_ranking_enabled, set_reach_ranking_enabled
+
+    action = (context.args[0].lower() if context.args else "status").strip()
+    if action in {"on", "enable", "enabled", "zapnout"}:
+        result = set_reach_ranking_enabled(True)
+    elif action in {"off", "disable", "disabled", "vypnout"}:
+        result = set_reach_ranking_enabled(False)
+    elif action in {"status", "stav"}:
+        result = {"reach_ranking_enabled": is_reach_ranking_enabled()}
+    else:
+        await msg.reply_text("Usage: /engage_reach on|off|status")
+        return
+
+    enabled = bool(result["reach_ranking_enabled"])
+    await msg.reply_text(
+        "Medium engagement reach ranking (trial)\n"
+        f"Status: {'ON - picks the best-scoring eligible candidate, not just the first found' if enabled else 'OFF - first eligible candidate wins, as before'}\n"
+        "Scoring favors articles published in the last few days and a response "
+        "count where our comment is unlikely to be buried.\n"
         "Use /engage_rules to show the full engagement setup."
     )
 

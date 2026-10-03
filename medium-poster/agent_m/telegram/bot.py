@@ -85,6 +85,9 @@ async def _scheduled_publish(context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def _scheduled_engagement_slot(context: ContextTypes.DEFAULT_TYPE) -> None:
+    from agent_m.medium_engagement import touch_heartbeat
+
+    touch_heartbeat("engagement_slot")
     try:
         from agent_m.medium_engagement import (
             approve_opportunity,
@@ -147,19 +150,52 @@ async def _scheduled_engagement_slot(context: ContextTypes.DEFAULT_TYPE) -> None
         )
 
 
-async def _scheduled_engagement_summary(context: ContextTypes.DEFAULT_TYPE) -> None:
+async def _scheduled_session_refresh(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Keep the Medium Playwright session warm even when nothing is published.
+
+    Publishing an article was the only job that ever rewrote the cookie jar, so
+    turning the article pipeline off left the engagement scout on a session that
+    slowly went stale.
+    """
+    from agent_m.medium_engagement import touch_heartbeat
+
+    touch_heartbeat("session_refresh")
     try:
-        from agent_m.medium_engagement import format_daily_summary
+        from agent_m.publishers.medium_playwright import MediumPlaywrightPublisher
+
+        result = await MediumPlaywrightPublisher().refresh_session()
+        if result.get("signed_in") and result.get("cookies_saved"):
+            log.info("Medium session refresh ok: %s", result)
+            return
+        await context.bot.send_message(
+            chat_id=config.telegram_admin_chat_id,
+            text=(
+                "Medium session refresh could not confirm a signed-in session.\n"
+                f"URL: {result.get('url')}\n"
+                "Send a fresh Cookie-Editor export (/medium_login) before engagement stops working."
+            ),
+        )
+    except Exception as e:
+        log.exception("Medium session refresh failed")
+        await context.bot.send_message(
+            chat_id=config.telegram_admin_chat_id,
+            text=f"Medium session refresh failed:\n{e}",
+        )
+
+
+async def _scheduled_engagement_weekly_summary(context: ContextTypes.DEFAULT_TYPE) -> None:
+    try:
+        from agent_m.medium_engagement import format_weekly_summary
 
         await context.bot.send_message(
             chat_id=config.telegram_admin_chat_id,
-            text=format_daily_summary(),
+            text=format_weekly_summary(),
         )
     except Exception as e:
-        log.exception("Medium engagement summary failed")
+        log.exception("Medium engagement weekly summary failed")
         await context.bot.send_message(
             chat_id=config.telegram_admin_chat_id,
-            text=f"Medium engagement summary failed:\n{e}",
+            text=f"Medium engagement weekly summary failed:\n{e}",
         )
 
 
@@ -175,7 +211,7 @@ def _schedule_engagement_slots(application) -> None:
     for job in application.job_queue.jobs():
         if job.name.startswith("medium_engagement_") and job.name not in {
             "medium_engagement_schedule_day",
-            "medium_engagement_summary",
+            "medium_engagement_weekly_summary",
         }:
             job.schedule_removal()
     slots = planned_times_for_today(now, count=daily_count)
@@ -212,12 +248,17 @@ _BOT_COMMANDS = [
     BotCommand("engage_auto", "Param: <0-10> - denni pocet engagement navrhu"),
     BotCommand("engage_autopost", "Param: on|off|status - komentare bez schvalovani"),
     BotCommand("engage_notify", "Param: on|off|status - okamzite engagement notifikace"),
+    BotCommand("engage_reach", "Param: on|off|status - razeni kandidatu podle dosahu (zkusebni)"),
     BotCommand("status", "Využití tokenů a rozvrh"),
     BotCommand("help", "Nápověda"),
 ]
 
 
 async def _post_init(application) -> None:
+    from agent_m.medium_engagement import touch_heartbeat
+
+    touch_heartbeat("startup")
+
     await application.bot.set_my_commands(_BOT_COMMANDS)
     log.info("Registered %d bot commands in Telegram menu", len(_BOT_COMMANDS))
 
@@ -237,6 +278,13 @@ async def _post_init(application) -> None:
         target_time.strftime("%H:%M"),
     )
 
+    application.job_queue.run_daily(
+        callback=_scheduled_session_refresh,
+        time=datetime.time(hour=6, minute=40, tzinfo=tz),
+        name="medium_session_refresh",
+    )
+    log.info("Scheduled Medium session refresh at 06:40 Europe/Prague")
+
     _schedule_engagement_slots(application)
     application.job_queue.run_daily(
         callback=_schedule_engagement_day,
@@ -244,11 +292,12 @@ async def _post_init(application) -> None:
         name="medium_engagement_schedule_day",
     )
     application.job_queue.run_daily(
-        callback=_scheduled_engagement_summary,
+        callback=_scheduled_engagement_weekly_summary,
         time=datetime.time(hour=21, minute=1, tzinfo=tz),
-        name="medium_engagement_summary",
+        days=(6,),  # Sunday only (PTB JobQueue: 0=Monday .. 6=Sunday)
+        name="medium_engagement_weekly_summary",
     )
-    log.info("Scheduled Medium engagement summary at 21:01 Europe/Prague")
+    log.info("Scheduled Medium engagement summary weekly, Sunday 21:01 Europe/Prague (daily summary removed)")
 
 
 def build_app():
@@ -271,6 +320,7 @@ def build_app():
     app.add_handler(CommandHandler("engage_auto", handlers.engage_auto_cmd))
     app.add_handler(CommandHandler("engage_autopost", handlers.engage_autopost_cmd))
     app.add_handler(CommandHandler("engage_notify", handlers.engage_notify_cmd))
+    app.add_handler(CommandHandler("engage_reach", handlers.engage_reach_cmd))
     app.add_handler(CommandHandler("status", handlers.status_cmd))
     app.add_handler(CommandHandler("feedback", handlers.feedback_cmd))
     app.add_handler(CommandHandler("feedback_clear", handlers.feedback_clear_cmd))

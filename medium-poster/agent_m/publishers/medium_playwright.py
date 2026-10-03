@@ -276,6 +276,7 @@ class MediumPlaywrightPublisher:
                     }""",
                     {"query": query, "limit": limit},
                 )
+                await self._persist_session_cookies(context, "search")
                 await browser.close()
                 return articles
         finally:
@@ -325,7 +326,40 @@ class MediumPlaywrightPublisher:
                             }
                             return best;
                         };
+                        // Medium renders the response count as a bare number
+                        // inside the control itself - <button aria-label=
+                        // "responses">1</button> - so the word never reaches
+                        // body.innerText and the text scan above always says 0.
+                        const countFromControls = (pattern) => {
+                            const controls = Array.from(
+                                document.querySelectorAll('button,[role="button"],a')
+                            );
+                            let best = null;
+                            let sawControl = false;
+                            for (const el of controls) {
+                                const meta = `${el.getAttribute('aria-label') || ''} `
+                                    + `${el.getAttribute('data-testid') || ''}`;
+                                if (!pattern.test(meta)) continue;
+                                sawControl = true;
+                                const raw = String(el.innerText || '').replace(/,/g, '').trim();
+                                const match = raw.match(/^([0-9]+(?:\\.[0-9]+)?)\\s*([KkMm]?)$/);
+                                if (!match) continue;
+                                let n = parseFloat(match[1] || '0');
+                                const suffix = (match[2] || '').toLowerCase();
+                                if (suffix === 'k') n *= 1000;
+                                if (suffix === 'm') n *= 1000000;
+                                best = Math.max(best === null ? 0 : best, Math.round(n));
+                            }
+                            return {value: best, sawControl};
+                        };
                         const text = document.body?.innerText || '';
+                        const responseControls = countFromControls(/responses|comments/i);
+                        const responsesFromText = parseCount(text, ['responses?', 'comments?']);
+                        // A response control with no number on it means zero -
+                        // that is a real answer, not a failed read.
+                        const responses = responseControls.value !== null
+                            ? responseControls.value
+                            : (responseControls.sawControl ? 0 : responsesFromText);
                         const anchors = Array.from(document.querySelectorAll('a[href]'));
                         const articleHandle = (() => {
                             try {
@@ -358,7 +392,10 @@ class MediumPlaywrightPublisher:
                             lang: document.documentElement.lang || '',
                             title: document.title || '',
                             textSample: text.slice(0, 5000),
-                            responses: parseCount(text, ['responses?', 'comments?']),
+                            responses,
+                            responsesKnown: responseControls.value !== null
+                                || responseControls.sawControl
+                                || responsesFromText > 0,
                             followers: parseCount(text, ['followers?']),
                             authorProfileUrl: author ? author.href.split('?')[0].replace(/\\/$/, '') : '',
                         };
@@ -387,9 +424,83 @@ class MediumPlaywrightPublisher:
                             log.info("Medium author profile inspection failed for %s: %s", article_url, exc)
                     return details
                 finally:
+                    await self._persist_session_cookies(context, "article inspection")
                     await browser.close()
         finally:
             self._cleanup_display()
+
+    async def refresh_session(self) -> dict:
+        """Open an authenticated Medium page and write the session cookies back.
+
+        Publishing an article used to be the only thing that ever rewrote the
+        cookie jar, so `/medium_publish off` silently let the Medium session rot
+        until the engagement scout could no longer read logged-in article pages.
+        This keeps the session warm on its own schedule.
+        """
+        if not _COOKIES_FILE.exists():
+            raise RuntimeError(
+                "No Medium cookies found. Send a Cookie-Editor JSON export to the bot first."
+            )
+
+        self._ensure_display()
+        from playwright.async_api import async_playwright
+
+        try:
+            stealth = self._make_stealth()
+            async with stealth.use_async(async_playwright()) as p:
+                browser = await p.chromium.launch(headless=False, args=self._browser_args())
+                context = await browser.new_context(
+                    user_agent=self._user_agent(),
+                    viewport={"width": 1280, "height": 900},
+                    locale="en-US",
+                    timezone_id="Europe/Prague",
+                    extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
+                )
+                await stealth.apply_stealth_async(context)
+                await context.add_cookies(self._load_cookies())
+                page = await context.new_page()
+                try:
+                    await page.goto(
+                        "https://medium.com/me/stories?tab=posts-published",
+                        wait_until="domcontentloaded",
+                        timeout=60000,
+                    )
+                    await self._human_delay(4, 7)
+                    await self._wait_for_cloudflare(page, "session_refresh")
+                    url = page.url.lower()
+                    signed_in = "signin" not in url and "login" not in url
+                    saved = await self._persist_session_cookies(context, "session refresh")
+                    return {"signed_in": signed_in, "cookies_saved": saved, "url": page.url}
+                finally:
+                    await browser.close()
+        finally:
+            self._cleanup_display()
+
+    @classmethod
+    async def _persist_session_cookies(cls, context, label: str) -> bool:
+        """Write refreshed cookies back to disk after a Medium browser session.
+
+        Read-only flows refresh the same session as publishing, so they persist
+        it too. The jar is only overwritten while the session still carries its
+        login cookies, so a page that happened to render logged-out can never
+        replace a good jar with an anonymous one.
+        """
+        try:
+            cookies = await context.cookies()
+        except Exception:
+            return False
+        if not cookies:
+            return False
+        names = {c.get("name") for c in cookies}
+        if not {"sid", "uid"} <= names:
+            log.warning(
+                "Medium: not persisting cookies after %s - login cookies missing from session",
+                label,
+            )
+            return False
+        _COOKIES_FILE.write_text(json.dumps(cls._normalize_cookies(cookies), indent=2))
+        log.info("Medium: refreshed session cookies after %s (%d cookies)", label, len(cookies))
+        return True
 
     async def schedule_draft_for_later(
         self,
