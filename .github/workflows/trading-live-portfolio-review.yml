@@ -1,0 +1,33 @@
+name: Trading Live Portfolio Review
+
+# Read-only diagnostic, manual only. For every live portfolio that is not archived: its rule,
+# the live trades it took under that exact rule, paper portfolios running the identical rule,
+# and (dip rules) the backtest replay, each counted in distinct markets. Places no orders,
+# writes nothing, uses no secrets.
+on:
+  workflow_dispatch:
+    inputs:
+      min_markets:
+        description: "Markets an exact setting needs before a claim rests on it"
+        required: false
+        default: "50"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Review every live portfolio against the evidence for its exact rule
+        working-directory: trading
+        env:
+          REVIEW_MIN_MARKETS: ${{ inputs.min_markets }}
+        run: node tools/live-portfolio-review.mjs
