@@ -2,20 +2,1160 @@
   "schema": 1,
   "pages": {
     "home": {
-      "bridge": "performance-audit",
-      "reachable": true
+      "schema": 1,
+      "uri": "/?jamu_bridge=performance-audit",
+      "context": {
+        "home": true,
+        "product": false,
+        "cart": false,
+        "checkout": false
+      },
+      "metrics": {
+        "wordpress_seconds": 3,
+        "database_queries": 412,
+        "memory_peak_bytes": 205520896,
+        "scripts_enqueued": 23,
+        "styles_enqueued": 54,
+        "set_cookie_headers": 2
+      },
+      "cache": {
+        "wp_cache_constant": false,
+        "advanced_cache_dropin": false,
+        "object_cache_dropin": true,
+        "external_object_cache": false,
+        "object_cache_class": "WP_Object_Cache",
+        "htaccess_exists": true,
+        "htaccess_has_expires_rules": false,
+        "htaccess_has_cache_control_rules": false,
+        "wp_optimize_options": [
+          {
+            "name": "wp-optimize-auto",
+            "bytes": 215,
+            "keys": [
+              "revisions",
+              "trash",
+              "drafts",
+              "unapproved",
+              "optimize",
+              "usermeta",
+              "spams",
+              "transient"
+            ]
+          },
+          {
+            "name": "wp-optimize-autosmush",
+            "bytes": 0,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-back_up_delete_after",
+            "bytes": 0,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-back_up_delete_after_days",
+            "bytes": 2,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-back_up_original",
+            "bytes": 1,
+            "scalar": "1"
+          },
+          {
+            "name": "wp-optimize-completed_task_count",
+            "bytes": 3,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-compression_server",
+            "bytes": 9,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-corrupted-tables-count",
+            "bytes": 1,
+            "scalar": "0"
+          },
+          {
+            "name": "wp-optimize-dismiss_dash_notice_until",
+            "bytes": 10,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-dismiss_notice",
+            "bytes": 10,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-enable-admin-menu",
+            "bytes": 5,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-image_quality",
+            "bytes": 2,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-install-or-update-notice-version",
+            "bytes": 3,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-installed-for",
+            "bytes": 10,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-is_gzip_compression_enabled",
+            "bytes": 4,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-last-optimized",
+            "bytes": 5,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-retention-enabled",
+            "bytes": 5,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-retention-period",
+            "bytes": 1,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-schedule",
+            "bytes": 5,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-schedule-type",
+            "bytes": 10,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-settings",
+            "bytes": 577,
+            "keys": [
+              "user-revisions",
+              "user-trash",
+              "user-orphandata",
+              "user-pingbacks",
+              "user-orphanedtables",
+              "user-attachments",
+              "user-trackbacks",
+              "user-commentmeta",
+              "user-postmeta",
+              "user-drafts",
+              "user-unapproved",
+              "user-optimize",
+              "user-usermeta",
+              "user-repairtables",
+              "user-spams",
+              "user-transient",
+              "last_saved_in"
+            ]
+          },
+          {
+            "name": "wp-optimize-show_smush_metabox",
+            "bytes": 4,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-total_bytes_saved",
+            "bytes": 8,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-total_percent_saved",
+            "bytes": 15,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-total-cleaned",
+            "bytes": 1,
+            "scalar": "0"
+          },
+          {
+            "name": "wp-optimize-total-cleaned-current-month",
+            "bytes": 1,
+            "scalar": "0"
+          },
+          {
+            "name": "wp-optimize-total-cleaned-previous-month",
+            "bytes": 1,
+            "scalar": "0"
+          },
+          {
+            "name": "wp-optimize-wpo_last_minify_preload",
+            "bytes": 10,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-wpo_last_minify_preload_type",
+            "bytes": 7,
+            "scalar": null
+          },
+          {
+            "name": "wpo_cache_config",
+            "bytes": 1253,
+            "keys": [
+              "enable_page_caching",
+              "page_cache_length_value",
+              "page_cache_length_unit",
+              "page_cache_length",
+              "cache_exception_conditional_tags",
+              "cache_specific_urls_only",
+              "cache_include_urls",
+              "cache_exception_urls",
+              "cache_ignore_query_variables",
+              "cache_exception_cookies",
+              "cache_exception_browser_agents",
+              "enable_sitemap_preload",
+              "enable_schedule_preload",
+              "preload_schedule_type",
+              "enable_mobile_caching",
+              "enable_user_caching",
+              "site_url",
+              "enable_cache_per_country",
+              "enable_cache_aelia_currency",
+              "permalink_structure",
+              "uploads",
+              "gmt_offset",
+              "timezone_string",
+              "date_format",
+              "time_format",
+              "use_webp_images",
+              "host_gravatars_locally",
+              "auto_preload_purged_contents",
+              "enable_rest_caching",
+              "last_cleared"
+            ],
+            "enable_page_caching": false
+          },
+          {
+            "name": "wpo_minify_config",
+            "bytes": 1979,
+            "keys": [
+              "debug",
+              "enabled_css_preload",
+              "enabled_js_preload",
+              "hpreconnect",
+              "hpreload",
+              "loadcss",
+              "remove_css",
+              "critical_path_css",
+              "critical_path_css_is_front_page",
+              "preserve_settings_on_uninstall",
+              "disable_when_logged_in",
+              "default_protocol",
+              "html_minification",
+              "clean_header_one",
+              "emoji_removal",
+              "merge_google_fonts",
+              "enable_display_swap",
+              "remove_googlefonts",
+              "host_local_google_fonts",
+              "disable_google_fonts_processing",
+              "gfonts_method",
+              "fawesome_method",
+              "enable_css",
+              "enable_css_minification",
+              "enable_merging_of_css",
+              "remove_print_mediatypes",
+              "inline_css",
+              "enable_js",
+              "enable_js_minification",
+              "enable_merging_of_js"
+            ],
+            "enabled": true
+          },
+          {
+            "name": "wpo_update_version",
+            "bytes": 5,
+            "scalar": null
+          },
+          {
+            "name": "wpo_version",
+            "bytes": 5,
+            "scalar": null
+          }
+        ]
+      },
+      "database": {
+        "autoloaded_options_bytes": 475594
+      }
     },
     "product_en": {
-      "bridge": "performance-audit",
-      "reachable": true
+      "schema": 1,
+      "uri": "/en/product/herbal-therapeutic-oil-sanga-sanga-classic/?jamu_bridge=performance-audit",
+      "context": {
+        "home": false,
+        "product": true,
+        "cart": false,
+        "checkout": false
+      },
+      "metrics": {
+        "wordpress_seconds": 4.224,
+        "database_queries": 495,
+        "memory_peak_bytes": 207618048,
+        "scripts_enqueued": 32,
+        "styles_enqueued": 77,
+        "set_cookie_headers": 0
+      },
+      "cache": {
+        "wp_cache_constant": false,
+        "advanced_cache_dropin": false,
+        "object_cache_dropin": true,
+        "external_object_cache": false,
+        "object_cache_class": "WP_Object_Cache",
+        "htaccess_exists": true,
+        "htaccess_has_expires_rules": false,
+        "htaccess_has_cache_control_rules": false,
+        "wp_optimize_options": [
+          {
+            "name": "wp-optimize-auto",
+            "bytes": 215,
+            "keys": [
+              "revisions",
+              "trash",
+              "drafts",
+              "unapproved",
+              "optimize",
+              "usermeta",
+              "spams",
+              "transient"
+            ]
+          },
+          {
+            "name": "wp-optimize-autosmush",
+            "bytes": 0,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-back_up_delete_after",
+            "bytes": 0,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-back_up_delete_after_days",
+            "bytes": 2,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-back_up_original",
+            "bytes": 1,
+            "scalar": "1"
+          },
+          {
+            "name": "wp-optimize-completed_task_count",
+            "bytes": 3,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-compression_server",
+            "bytes": 9,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-corrupted-tables-count",
+            "bytes": 1,
+            "scalar": "0"
+          },
+          {
+            "name": "wp-optimize-dismiss_dash_notice_until",
+            "bytes": 10,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-dismiss_notice",
+            "bytes": 10,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-enable-admin-menu",
+            "bytes": 5,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-image_quality",
+            "bytes": 2,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-install-or-update-notice-version",
+            "bytes": 3,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-installed-for",
+            "bytes": 10,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-is_gzip_compression_enabled",
+            "bytes": 4,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-last-optimized",
+            "bytes": 5,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-retention-enabled",
+            "bytes": 5,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-retention-period",
+            "bytes": 1,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-schedule",
+            "bytes": 5,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-schedule-type",
+            "bytes": 10,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-settings",
+            "bytes": 577,
+            "keys": [
+              "user-revisions",
+              "user-trash",
+              "user-orphandata",
+              "user-pingbacks",
+              "user-orphanedtables",
+              "user-attachments",
+              "user-trackbacks",
+              "user-commentmeta",
+              "user-postmeta",
+              "user-drafts",
+              "user-unapproved",
+              "user-optimize",
+              "user-usermeta",
+              "user-repairtables",
+              "user-spams",
+              "user-transient",
+              "last_saved_in"
+            ]
+          },
+          {
+            "name": "wp-optimize-show_smush_metabox",
+            "bytes": 4,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-total_bytes_saved",
+            "bytes": 8,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-total_percent_saved",
+            "bytes": 15,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-total-cleaned",
+            "bytes": 1,
+            "scalar": "0"
+          },
+          {
+            "name": "wp-optimize-total-cleaned-current-month",
+            "bytes": 1,
+            "scalar": "0"
+          },
+          {
+            "name": "wp-optimize-total-cleaned-previous-month",
+            "bytes": 1,
+            "scalar": "0"
+          },
+          {
+            "name": "wp-optimize-wpo_last_minify_preload",
+            "bytes": 10,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-wpo_last_minify_preload_type",
+            "bytes": 7,
+            "scalar": null
+          },
+          {
+            "name": "wpo_cache_config",
+            "bytes": 1253,
+            "keys": [
+              "enable_page_caching",
+              "page_cache_length_value",
+              "page_cache_length_unit",
+              "page_cache_length",
+              "cache_exception_conditional_tags",
+              "cache_specific_urls_only",
+              "cache_include_urls",
+              "cache_exception_urls",
+              "cache_ignore_query_variables",
+              "cache_exception_cookies",
+              "cache_exception_browser_agents",
+              "enable_sitemap_preload",
+              "enable_schedule_preload",
+              "preload_schedule_type",
+              "enable_mobile_caching",
+              "enable_user_caching",
+              "site_url",
+              "enable_cache_per_country",
+              "enable_cache_aelia_currency",
+              "permalink_structure",
+              "uploads",
+              "gmt_offset",
+              "timezone_string",
+              "date_format",
+              "time_format",
+              "use_webp_images",
+              "host_gravatars_locally",
+              "auto_preload_purged_contents",
+              "enable_rest_caching",
+              "last_cleared"
+            ],
+            "enable_page_caching": false
+          },
+          {
+            "name": "wpo_minify_config",
+            "bytes": 1979,
+            "keys": [
+              "debug",
+              "enabled_css_preload",
+              "enabled_js_preload",
+              "hpreconnect",
+              "hpreload",
+              "loadcss",
+              "remove_css",
+              "critical_path_css",
+              "critical_path_css_is_front_page",
+              "preserve_settings_on_uninstall",
+              "disable_when_logged_in",
+              "default_protocol",
+              "html_minification",
+              "clean_header_one",
+              "emoji_removal",
+              "merge_google_fonts",
+              "enable_display_swap",
+              "remove_googlefonts",
+              "host_local_google_fonts",
+              "disable_google_fonts_processing",
+              "gfonts_method",
+              "fawesome_method",
+              "enable_css",
+              "enable_css_minification",
+              "enable_merging_of_css",
+              "remove_print_mediatypes",
+              "inline_css",
+              "enable_js",
+              "enable_js_minification",
+              "enable_merging_of_js"
+            ],
+            "enabled": true
+          },
+          {
+            "name": "wpo_update_version",
+            "bytes": 5,
+            "scalar": null
+          },
+          {
+            "name": "wpo_version",
+            "bytes": 5,
+            "scalar": null
+          }
+        ]
+      },
+      "database": {
+        "autoloaded_options_bytes": 475594
+      }
     },
     "cart_en": {
-      "bridge": "performance-audit",
-      "reachable": true
+      "schema": 1,
+      "uri": "/en/cart/?jamu_bridge=performance-audit",
+      "context": {
+        "home": false,
+        "product": false,
+        "cart": true,
+        "checkout": false
+      },
+      "metrics": {
+        "wordpress_seconds": 4.571,
+        "database_queries": 496,
+        "memory_peak_bytes": 207618048,
+        "scripts_enqueued": 90,
+        "styles_enqueued": 60,
+        "set_cookie_headers": 0
+      },
+      "cache": {
+        "wp_cache_constant": false,
+        "advanced_cache_dropin": false,
+        "object_cache_dropin": true,
+        "external_object_cache": false,
+        "object_cache_class": "WP_Object_Cache",
+        "htaccess_exists": true,
+        "htaccess_has_expires_rules": false,
+        "htaccess_has_cache_control_rules": false,
+        "wp_optimize_options": [
+          {
+            "name": "wp-optimize-auto",
+            "bytes": 215,
+            "keys": [
+              "revisions",
+              "trash",
+              "drafts",
+              "unapproved",
+              "optimize",
+              "usermeta",
+              "spams",
+              "transient"
+            ]
+          },
+          {
+            "name": "wp-optimize-autosmush",
+            "bytes": 0,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-back_up_delete_after",
+            "bytes": 0,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-back_up_delete_after_days",
+            "bytes": 2,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-back_up_original",
+            "bytes": 1,
+            "scalar": "1"
+          },
+          {
+            "name": "wp-optimize-completed_task_count",
+            "bytes": 3,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-compression_server",
+            "bytes": 9,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-corrupted-tables-count",
+            "bytes": 1,
+            "scalar": "0"
+          },
+          {
+            "name": "wp-optimize-dismiss_dash_notice_until",
+            "bytes": 10,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-dismiss_notice",
+            "bytes": 10,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-enable-admin-menu",
+            "bytes": 5,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-image_quality",
+            "bytes": 2,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-install-or-update-notice-version",
+            "bytes": 3,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-installed-for",
+            "bytes": 10,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-is_gzip_compression_enabled",
+            "bytes": 4,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-last-optimized",
+            "bytes": 5,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-retention-enabled",
+            "bytes": 5,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-retention-period",
+            "bytes": 1,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-schedule",
+            "bytes": 5,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-schedule-type",
+            "bytes": 10,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-settings",
+            "bytes": 577,
+            "keys": [
+              "user-revisions",
+              "user-trash",
+              "user-orphandata",
+              "user-pingbacks",
+              "user-orphanedtables",
+              "user-attachments",
+              "user-trackbacks",
+              "user-commentmeta",
+              "user-postmeta",
+              "user-drafts",
+              "user-unapproved",
+              "user-optimize",
+              "user-usermeta",
+              "user-repairtables",
+              "user-spams",
+              "user-transient",
+              "last_saved_in"
+            ]
+          },
+          {
+            "name": "wp-optimize-show_smush_metabox",
+            "bytes": 4,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-total_bytes_saved",
+            "bytes": 8,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-total_percent_saved",
+            "bytes": 15,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-total-cleaned",
+            "bytes": 1,
+            "scalar": "0"
+          },
+          {
+            "name": "wp-optimize-total-cleaned-current-month",
+            "bytes": 1,
+            "scalar": "0"
+          },
+          {
+            "name": "wp-optimize-total-cleaned-previous-month",
+            "bytes": 1,
+            "scalar": "0"
+          },
+          {
+            "name": "wp-optimize-wpo_last_minify_preload",
+            "bytes": 10,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-wpo_last_minify_preload_type",
+            "bytes": 7,
+            "scalar": null
+          },
+          {
+            "name": "wpo_cache_config",
+            "bytes": 1253,
+            "keys": [
+              "enable_page_caching",
+              "page_cache_length_value",
+              "page_cache_length_unit",
+              "page_cache_length",
+              "cache_exception_conditional_tags",
+              "cache_specific_urls_only",
+              "cache_include_urls",
+              "cache_exception_urls",
+              "cache_ignore_query_variables",
+              "cache_exception_cookies",
+              "cache_exception_browser_agents",
+              "enable_sitemap_preload",
+              "enable_schedule_preload",
+              "preload_schedule_type",
+              "enable_mobile_caching",
+              "enable_user_caching",
+              "site_url",
+              "enable_cache_per_country",
+              "enable_cache_aelia_currency",
+              "permalink_structure",
+              "uploads",
+              "gmt_offset",
+              "timezone_string",
+              "date_format",
+              "time_format",
+              "use_webp_images",
+              "host_gravatars_locally",
+              "auto_preload_purged_contents",
+              "enable_rest_caching",
+              "last_cleared"
+            ],
+            "enable_page_caching": false
+          },
+          {
+            "name": "wpo_minify_config",
+            "bytes": 1979,
+            "keys": [
+              "debug",
+              "enabled_css_preload",
+              "enabled_js_preload",
+              "hpreconnect",
+              "hpreload",
+              "loadcss",
+              "remove_css",
+              "critical_path_css",
+              "critical_path_css_is_front_page",
+              "preserve_settings_on_uninstall",
+              "disable_when_logged_in",
+              "default_protocol",
+              "html_minification",
+              "clean_header_one",
+              "emoji_removal",
+              "merge_google_fonts",
+              "enable_display_swap",
+              "remove_googlefonts",
+              "host_local_google_fonts",
+              "disable_google_fonts_processing",
+              "gfonts_method",
+              "fawesome_method",
+              "enable_css",
+              "enable_css_minification",
+              "enable_merging_of_css",
+              "remove_print_mediatypes",
+              "inline_css",
+              "enable_js",
+              "enable_js_minification",
+              "enable_merging_of_js"
+            ],
+            "enabled": true
+          },
+          {
+            "name": "wpo_update_version",
+            "bytes": 5,
+            "scalar": null
+          },
+          {
+            "name": "wpo_version",
+            "bytes": 5,
+            "scalar": null
+          }
+        ]
+      },
+      "database": {
+        "autoloaded_options_bytes": 475594
+      }
     },
     "checkout_en": {
-      "bridge": "performance-audit",
-      "reachable": true
+      "schema": 1,
+      "uri": "/en/cart/",
+      "context": {
+        "home": false,
+        "product": false,
+        "cart": true,
+        "checkout": false
+      },
+      "metrics": {
+        "wordpress_seconds": 4.415,
+        "database_queries": 496,
+        "memory_peak_bytes": 207618048,
+        "scripts_enqueued": 90,
+        "styles_enqueued": 60,
+        "set_cookie_headers": 0
+      },
+      "cache": {
+        "wp_cache_constant": false,
+        "advanced_cache_dropin": false,
+        "object_cache_dropin": true,
+        "external_object_cache": false,
+        "object_cache_class": "WP_Object_Cache",
+        "htaccess_exists": true,
+        "htaccess_has_expires_rules": false,
+        "htaccess_has_cache_control_rules": false,
+        "wp_optimize_options": [
+          {
+            "name": "wp-optimize-auto",
+            "bytes": 215,
+            "keys": [
+              "revisions",
+              "trash",
+              "drafts",
+              "unapproved",
+              "optimize",
+              "usermeta",
+              "spams",
+              "transient"
+            ]
+          },
+          {
+            "name": "wp-optimize-autosmush",
+            "bytes": 0,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-back_up_delete_after",
+            "bytes": 0,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-back_up_delete_after_days",
+            "bytes": 2,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-back_up_original",
+            "bytes": 1,
+            "scalar": "1"
+          },
+          {
+            "name": "wp-optimize-completed_task_count",
+            "bytes": 3,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-compression_server",
+            "bytes": 9,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-corrupted-tables-count",
+            "bytes": 1,
+            "scalar": "0"
+          },
+          {
+            "name": "wp-optimize-dismiss_dash_notice_until",
+            "bytes": 10,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-dismiss_notice",
+            "bytes": 10,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-enable-admin-menu",
+            "bytes": 5,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-image_quality",
+            "bytes": 2,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-install-or-update-notice-version",
+            "bytes": 3,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-installed-for",
+            "bytes": 10,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-is_gzip_compression_enabled",
+            "bytes": 4,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-last-optimized",
+            "bytes": 5,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-retention-enabled",
+            "bytes": 5,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-retention-period",
+            "bytes": 1,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-schedule",
+            "bytes": 5,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-schedule-type",
+            "bytes": 10,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-settings",
+            "bytes": 577,
+            "keys": [
+              "user-revisions",
+              "user-trash",
+              "user-orphandata",
+              "user-pingbacks",
+              "user-orphanedtables",
+              "user-attachments",
+              "user-trackbacks",
+              "user-commentmeta",
+              "user-postmeta",
+              "user-drafts",
+              "user-unapproved",
+              "user-optimize",
+              "user-usermeta",
+              "user-repairtables",
+              "user-spams",
+              "user-transient",
+              "last_saved_in"
+            ]
+          },
+          {
+            "name": "wp-optimize-show_smush_metabox",
+            "bytes": 4,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-total_bytes_saved",
+            "bytes": 8,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-total_percent_saved",
+            "bytes": 15,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-total-cleaned",
+            "bytes": 1,
+            "scalar": "0"
+          },
+          {
+            "name": "wp-optimize-total-cleaned-current-month",
+            "bytes": 1,
+            "scalar": "0"
+          },
+          {
+            "name": "wp-optimize-total-cleaned-previous-month",
+            "bytes": 1,
+            "scalar": "0"
+          },
+          {
+            "name": "wp-optimize-wpo_last_minify_preload",
+            "bytes": 10,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-wpo_last_minify_preload_type",
+            "bytes": 7,
+            "scalar": null
+          },
+          {
+            "name": "wpo_cache_config",
+            "bytes": 1253,
+            "keys": [
+              "enable_page_caching",
+              "page_cache_length_value",
+              "page_cache_length_unit",
+              "page_cache_length",
+              "cache_exception_conditional_tags",
+              "cache_specific_urls_only",
+              "cache_include_urls",
+              "cache_exception_urls",
+              "cache_ignore_query_variables",
+              "cache_exception_cookies",
+              "cache_exception_browser_agents",
+              "enable_sitemap_preload",
+              "enable_schedule_preload",
+              "preload_schedule_type",
+              "enable_mobile_caching",
+              "enable_user_caching",
+              "site_url",
+              "enable_cache_per_country",
+              "enable_cache_aelia_currency",
+              "permalink_structure",
+              "uploads",
+              "gmt_offset",
+              "timezone_string",
+              "date_format",
+              "time_format",
+              "use_webp_images",
+              "host_gravatars_locally",
+              "auto_preload_purged_contents",
+              "enable_rest_caching",
+              "last_cleared"
+            ],
+            "enable_page_caching": false
+          },
+          {
+            "name": "wpo_minify_config",
+            "bytes": 1979,
+            "keys": [
+              "debug",
+              "enabled_css_preload",
+              "enabled_js_preload",
+              "hpreconnect",
+              "hpreload",
+              "loadcss",
+              "remove_css",
+              "critical_path_css",
+              "critical_path_css_is_front_page",
+              "preserve_settings_on_uninstall",
+              "disable_when_logged_in",
+              "default_protocol",
+              "html_minification",
+              "clean_header_one",
+              "emoji_removal",
+              "merge_google_fonts",
+              "enable_display_swap",
+              "remove_googlefonts",
+              "host_local_google_fonts",
+              "disable_google_fonts_processing",
+              "gfonts_method",
+              "fawesome_method",
+              "enable_css",
+              "enable_css_minification",
+              "enable_merging_of_css",
+              "remove_print_mediatypes",
+              "inline_css",
+              "enable_js",
+              "enable_js_minification",
+              "enable_merging_of_js"
+            ],
+            "enabled": true
+          },
+          {
+            "name": "wpo_update_version",
+            "bytes": 5,
+            "scalar": null
+          },
+          {
+            "name": "wpo_version",
+            "bytes": 5,
+            "scalar": null
+          }
+        ]
+      },
+      "database": {
+        "autoloaded_options_bytes": 475594
+      }
     }
   }
 }
