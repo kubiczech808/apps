@@ -65,6 +65,8 @@ test("closed paper trades enrich missing tags through an exact observation token
   assert.match(helper, /trading_storage_observation_tags_for_tokens/);
   assert.match(helper, /paper_trade_taxonomy_fallback/,
     "an old row whose source did not retain tags still receives a cautious market classification");
+  assert.match(API, /\(ufc\|mma\|boxing\|ko\|tko\)/,
+    "historic combat-sport props retain their sports taxonomy even when their source tags are absent");
   assert.match(helper, /tokenId.*assetId/s);
   assert.doesNotMatch(helper, /eventSlug/, "a sibling market may never donate tags to this trade");
   assert.match(API, /compact_state_payload\([^\n]+\);\s*\$payload = paper_state_with_closed_trade_tags/s,

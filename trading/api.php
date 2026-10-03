@@ -1272,6 +1272,10 @@ function paper_trade_taxonomy_fallback(array $trade): array
     if (preg_match('/\b(fight|round|match|vs\.?|handicap|spread|o\s*\/\s*u|over|under)\b/', $identity) === 1) {
         $add('sports');
     }
+    if (preg_match('/\b(ufc|mma|boxing|ko|tko)\b/', $identity) === 1) {
+        $add('sports');
+        $add('ufc');
+    }
     if (isset($tags['esports'])) {
         $add('sports');
     }
