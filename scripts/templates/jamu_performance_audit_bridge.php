@@ -10,7 +10,7 @@
 
 defined('ABSPATH') || exit;
 
-$jamu_performance_token = (string) ($_SERVER['HTTP_X_JAMU_PERFORMANCE_AUDIT'] ?? '');
+$jamu_performance_token = (string) ($_SERVER['HTTP_X_JAMU_BRIDGE'] ?? $_SERVER['HTTP_X_JAMU_PERFORMANCE_AUDIT'] ?? '');
 if ($jamu_performance_token === ''
     || !hash_equals('__JAMU_TOKEN_HASH__', hash('sha256', $jamu_performance_token))) {
     return;

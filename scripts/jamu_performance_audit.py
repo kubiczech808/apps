@@ -63,6 +63,8 @@ def main() -> int:
             response = session.get(
                 url,
                 headers={
+                    # Blueboard is known to preserve this generic bridge header.
+                    'X-JAMU-Bridge': token,
                     'X-JAMU-Performance-Audit': token,
                     'Cache-Control': 'no-cache',
                     'User-Agent': 'JAMU performance audit/1.0',
