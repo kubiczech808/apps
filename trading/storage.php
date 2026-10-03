@@ -114,6 +114,11 @@ function trading_storage_bootstrap(PDO $pdo): void
         'CREATE TABLE IF NOT EXISTS trading_observations (
             observation_key CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL PRIMARY KEY,
             lifecycle ENUM(\'SCRAPED\', \'RESOLVED\') NOT NULL,
+            -- This is deliberately the one retained identifier outside the compressed payload.
+            -- It joins a snapshot to a real position in trading_trades, which lets retention
+            -- preserve every market the account actually traded without keeping source ids or
+            -- presentation-only projections forever.
+            token_id VARCHAR(191) CHARACTER SET ascii COLLATE ascii_bin NULL,
             end_at DATETIME NULL,
             market_probability DECIMAL(12,9) NULL,
             annualized_return DECIMAL(24,9) NULL,
@@ -582,9 +587,10 @@ function trading_storage_optimize_schema(PDO $pdo): void
 
 /**
  * The first version of trading_observations mirrored every field that was also inside the
- * compressed payload. None of those copies is queried: the execution scope needs only the
+ * compressed payload. The sole exception is token_id: it is the compact identity that joins
+ * an observation to a real trade during retention. The execution scope itself needs only the
  * lifecycle, freshness, probability, horizon, volume and potential return. A newly-created
- * table therefore uses the lean projection above. Existing installations remain readable and
+ * table therefore uses that lean projection. Existing installations remain readable and
  * writable until their deliberate, space-checked schema migration completes.
  */
 function trading_storage_observations_use_lean_schema(PDO $pdo): bool
@@ -618,6 +624,7 @@ function trading_storage_observation_statement_bindings(array $columns, bool $le
     return [
         'key' => $columns['key'],
         'lifecycle' => $columns['lifecycle'],
+        'tokenId' => $columns['tokenId'],
         'endAt' => $columns['endAt'],
         'probability' => $columns['probability'],
         'annualizedReturn' => $columns['annualizedReturn'],
@@ -646,10 +653,10 @@ function trading_storage_observation_insert_ignore_statement(PDO $pdo): PDOState
     }
     return $pdo->prepare(
         'INSERT IGNORE INTO trading_observations (
-           observation_key, lifecycle, end_at, market_probability, annualized_return, volume_usdc,
+           observation_key, lifecycle, token_id, end_at, market_probability, annualized_return, volume_usdc,
            payload, payload_checksum, created_at, updated_at
          ) VALUES (
-           :key, :lifecycle, :endAt, :probability, :annualizedReturn, :volume,
+           :key, :lifecycle, :tokenId, :endAt, :probability, :annualizedReturn, :volume,
            :payload, :checksum, :createdAt, :updatedAt
          )'
     );
@@ -1637,6 +1644,20 @@ function trading_storage_restore_stale_scraped_observation_archives(PDO $pdo, in
     );
 }
 
+/**
+ * Restore non-traded market snapshots only when an operator explicitly needs the raw source
+ * back in MySQL. They are otherwise deliberately kept out of the operational table.
+ */
+function trading_storage_restore_untraded_observation_archives(PDO $pdo, int $limit = 250): array
+{
+    return trading_storage_restore_observation_archives_from_root(
+        $pdo,
+        'untraded-observation-archive',
+        'untraded-observation-archive',
+        $limit,
+    );
+}
+
 function trading_storage_restore_observation_archives_from_root(
     PDO $pdo,
     string $directory,
@@ -2163,6 +2184,189 @@ function trading_storage_archive_stale_scraped_observations(PDO $pdo, int $limit
 }
 
 /**
+ * Count how much of the observation table belongs to an actual account position.
+ *
+ * trading_trades contains fills/positions, not the separate unfilled-order ledger. Its token
+ * is therefore the durable identity for the request "retain the markets we traded". The
+ * report is both an audit aid and a guard: an empty trade mirror never authorizes a bulk
+ * archive of every market snapshot.
+ */
+function trading_storage_traded_observation_retention_plan(PDO $pdo, int $keepDays = 3): array
+{
+    trading_storage_bootstrap($pdo);
+    // Three days matches the active-catalogue freshness rule. New and still-actionable
+    // observations stay nearby; only history that cannot influence the running executor is
+    // moved out, except for traded markets which remain indefinitely.
+    $keepDays = max(3, min(90, $keepDays));
+    $cutoff = gmdate('Y-m-d H:i:s', time() - $keepDays * 86400);
+    $tradedTokens = '(SELECT DISTINCT token_id FROM trading_trades
+        WHERE token_id IS NOT NULL AND token_id <> "")';
+    $statement = $pdo->prepare(
+        'SELECT
+            COUNT(*) AS total_rows,
+            COALESCE(SUM(o.lifecycle = "SCRAPED"), 0) AS scraped_rows,
+            COALESCE(SUM(o.lifecycle = "RESOLVED"), 0) AS resolved_rows,
+            COALESCE(SUM(t.token_id IS NOT NULL), 0) AS protected_rows,
+            COALESCE(SUM(t.token_id IS NULL), 0) AS untraded_rows,
+            COALESCE(SUM(t.token_id IS NULL AND o.updated_at < :cutoff), 0) AS archivable_rows,
+            COALESCE(SUM(o.token_id IS NULL OR o.token_id = ""), 0) AS rows_without_token
+         FROM trading_observations o
+         LEFT JOIN ' . $tradedTokens . ' t ON t.token_id = o.token_id'
+    );
+    $statement->execute(['cutoff' => $cutoff]);
+    $row = $statement->fetch() ?: [];
+    $tokenCount = (int) $pdo->query(
+        'SELECT COUNT(DISTINCT token_id) FROM trading_trades
+         WHERE token_id IS NOT NULL AND token_id <> ""'
+    )->fetchColumn();
+
+    return [
+        'keepDays' => $keepDays,
+        'cutoff' => $cutoff,
+        'tradeTokens' => $tokenCount,
+        'totalRows' => (int) ($row['total_rows'] ?? 0),
+        'scrapedRows' => (int) ($row['scraped_rows'] ?? 0),
+        'resolvedRows' => (int) ($row['resolved_rows'] ?? 0),
+        'protectedRows' => (int) ($row['protected_rows'] ?? 0),
+        'untradedRows' => (int) ($row['untraded_rows'] ?? 0),
+        'archivableRows' => (int) ($row['archivable_rows'] ?? 0),
+        'rowsWithoutToken' => (int) ($row['rows_without_token'] ?? 0),
+    ];
+}
+
+/**
+ * Archive old snapshots that have never become a position, while permanently retaining every
+ * SCRAPED and RESOLVED observation whose token appears in trading_trades.
+ *
+ * Unlike the former lifecycle-only stale-SCRAPED cleanup, this is trade-aware. The selected
+ * rows are written to an independently restorable gzip archive, reopened and counted, then
+ * deleted with the same trade/freshness predicate again so a concurrent fill or new scrape
+ * cannot race a just-written archive into deleting a now-protected live record.
+ */
+function trading_storage_archive_untraded_observations(PDO $pdo, int $limit = 2000, int $keepDays = 3): array
+{
+    $plan = trading_storage_traded_observation_retention_plan($pdo, $keepDays);
+    $limit = max(50, min(20000, $limit));
+    $keepDays = (int) $plan['keepDays'];
+    $cutoff = (string) $plan['cutoff'];
+    if ((int) $plan['tradeTokens'] === 0) {
+        throw new RuntimeException(
+            'The trade mirror has no token identities; refusing to archive untraded observations.'
+        );
+    }
+    if ((int) $plan['archivableRows'] === 0) {
+        return $plan + [
+            'archived' => 0,
+            'verified' => 0,
+            'deleted' => 0,
+            'file' => null,
+            'bytes' => 0,
+            'remaining' => 0,
+            'done' => true,
+        ];
+    }
+
+    $root = __DIR__ . '/data/untraded-observation-archive';
+    if (!is_dir($root) && !@mkdir($root, 0775, true) && !is_dir($root)) {
+        throw new RuntimeException('Could not create the untraded observation archive directory.');
+    }
+    $tradedTokens = '(SELECT DISTINCT token_id FROM trading_trades
+        WHERE token_id IS NOT NULL AND token_id <> "")';
+    $select = $pdo->prepare(
+        'SELECT o.observation_key, o.lifecycle, o.token_id, o.payload, o.updated_at
+         FROM trading_observations o
+         LEFT JOIN ' . $tradedTokens . ' t ON t.token_id = o.token_id
+         WHERE t.token_id IS NULL
+           AND o.updated_at < :cutoff
+         ORDER BY o.updated_at ASC, o.observation_key ASC
+         LIMIT ' . $limit
+    );
+    $select->execute(['cutoff' => $cutoff]);
+    $rows = $select->fetchAll();
+    if ($rows === []) {
+        return $plan + [
+            'archived' => 0,
+            'verified' => 0,
+            'deleted' => 0,
+            'file' => null,
+            'bytes' => 0,
+            'remaining' => 0,
+            'done' => true,
+        ];
+    }
+
+    $bucket = substr((string) ($rows[0]['updated_at'] ?? gmdate('Y-m-d')), 0, 7);
+    if (!preg_match('/^\d{4}-\d{2}$/', $bucket)) {
+        $bucket = gmdate('Y-m');
+    }
+    $dir = $root . '/' . $bucket;
+    if (!is_dir($dir) && !@mkdir($dir, 0775, true) && !is_dir($dir)) {
+        throw new RuntimeException('Could not create the untraded observation archive bucket ' . $bucket);
+    }
+    $path = $dir . '/' . gmdate('Ymd-His') . '-' . substr(bin2hex(random_bytes(4)), 0, 8) . '.ndjson.gz';
+    $handle = gzopen($path, 'wb9');
+    if ($handle === false) {
+        throw new RuntimeException('Could not open the untraded observation archive file for writing.');
+    }
+
+    $keys = [];
+    $written = 0;
+    foreach ($rows as $row) {
+        $key = (string) ($row['observation_key'] ?? '');
+        $payload = trading_storage_unpack($row['payload'] ?? null);
+        if ($key === '' || !is_array($payload)) {
+            // The source row stays in MySQL when its recovery copy cannot be reconstructed.
+            continue;
+        }
+        $line = json_encode([
+            'observationKey' => $key,
+            'lifecycle' => (string) ($row['lifecycle'] ?? 'SCRAPED'),
+            'tokenId' => (string) ($row['token_id'] ?? ''),
+            'updatedAt' => (string) ($row['updated_at'] ?? ''),
+            'payload' => $payload,
+        ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        if (!is_string($line)) {
+            continue;
+        }
+        gzwrite($handle, $line . "\n");
+        $keys[] = $key;
+        $written++;
+    }
+    gzclose($handle);
+
+    $verified = trading_storage_count_archived_rows($path);
+    if ($verified !== $written) {
+        throw new RuntimeException(
+            'The untraded archive holds ' . $verified . ' of ' . $written . ' rows; nothing was deleted.'
+        );
+    }
+
+    $deleted = 0;
+    foreach (array_chunk($keys, 500) as $chunk) {
+        $delete = $pdo->prepare(
+            'DELETE o FROM trading_observations o
+             LEFT JOIN ' . $tradedTokens . ' t ON t.token_id = o.token_id
+             WHERE o.observation_key IN (' . implode(', ', array_fill(0, count($chunk), '?')) . ')
+               AND t.token_id IS NULL
+               AND o.updated_at < ?'
+        );
+        $delete->execute(array_merge($chunk, [$cutoff]));
+        $deleted += $delete->rowCount();
+    }
+
+    $remainingPlan = trading_storage_traded_observation_retention_plan($pdo, $keepDays);
+    return $plan + [
+        'archived' => $written,
+        'verified' => $verified,
+        'deleted' => $deleted,
+        'file' => str_replace(__DIR__ . '/', '', $path),
+        'bytes' => (int) (@filesize($path) ?: 0),
+        'remaining' => (int) $remainingPlan['archivableRows'],
+        'done' => count($rows) < $limit,
+    ];
+}
+
+/**
  * Every settled observation held in the archive files, one at a time.
  *
  * This is what makes deletion safe. The fold rebuilds the statistics from scratch on every
@@ -2176,8 +2380,17 @@ function trading_storage_archive_stale_scraped_observations(PDO $pdo, int $limit
  */
 function trading_storage_stream_archived_observations(callable $onRow): int
 {
-    $root = __DIR__ . '/data/observation-archive';
-    $files = glob($root . '/*/*.ndjson.gz') ?: [];
+    // The trade-aware archive contains both lifecycles. Only its RESOLVED records belong in
+    // the historical statistics fold; SCRAPED records are recoverable source snapshots, not
+    // outcomes. The original resolved-only archive remains a source too.
+    $roots = [
+        __DIR__ . '/data/observation-archive',
+        __DIR__ . '/data/untraded-observation-archive',
+    ];
+    $files = [];
+    foreach ($roots as $root) {
+        $files = array_merge($files, glob($root . '/*/*.ndjson.gz') ?: []);
+    }
     sort($files, SORT_STRING);
     $seen = 0;
     foreach ($files as $file) {
@@ -2190,7 +2403,8 @@ function trading_storage_stream_archived_observations(callable $onRow): int
         while (($line = gzgets($handle)) !== false) {
             $decoded = json_decode(trim($line), true);
             $payload = is_array($decoded) ? ($decoded['payload'] ?? null) : null;
-            if (!is_array($payload)) {
+            $lifecycle = strtoupper(is_array($decoded) ? (string) ($decoded['lifecycle'] ?? 'RESOLVED') : '');
+            if (!is_array($payload) || $lifecycle !== 'RESOLVED') {
                 continue;
             }
             $seen++;
@@ -2390,8 +2604,8 @@ function trading_storage_rebuild_compacted_table(PDO $pdo, string $table): array
 
 /**
  * The observation row originally projected identifiers, labels, tags and timestamps beside
- * the complete compressed payload. They are all read from that payload; the SQL read path
- * never filters or joins on them. Keeping this plan separate from the migration lets the
+ * the complete compressed payload. source_id and the presentation projections are all read
+ * from that payload; only token_id stays as the compact link to actual trades. Keeping this plan separate from the migration lets the
  * maintenance workflow show exactly what will disappear before it asks MySQL to rebuild the
  * table, which matters on a quota-limited host.
  */
@@ -2417,7 +2631,6 @@ function trading_storage_observation_schema_plan(PDO $pdo): array
     }
     $redundant = [
         'source_id',
-        'token_id',
         'event_slug',
         'market_slug',
         'outcome_label',
@@ -2457,6 +2670,7 @@ function trading_storage_slim_observations_schema(PDO $pdo): array
     $operations = [
         'MODIFY `observation_key` CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL',
         'MODIFY `lifecycle` ENUM(\'SCRAPED\', \'RESOLVED\') NOT NULL',
+        'MODIFY `token_id` VARCHAR(191) CHARACTER SET ascii COLLATE ascii_bin NULL',
         'MODIFY `payload_checksum` CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL',
     ];
     foreach ($dropColumns as $column) {
@@ -2931,10 +3145,10 @@ function trading_storage_observations_upsert(array $items): int
     $lean = trading_storage_observations_use_lean_schema($pdo);
     $statement = $pdo->prepare($lean
         ? "INSERT INTO trading_observations (
-               observation_key, lifecycle, end_at, market_probability, annualized_return, volume_usdc,
+               observation_key, lifecycle, token_id, end_at, market_probability, annualized_return, volume_usdc,
                payload, payload_checksum, created_at, updated_at
              ) VALUES (
-               :key, :lifecycle, :endAt, :probability, :annualizedReturn, :volume,
+               :key, :lifecycle, :tokenId, :endAt, :probability, :annualizedReturn, :volume,
                :payload, :checksum, :createdAt, :updatedAt
              ) ON DUPLICATE KEY UPDATE
                /* A settlement is terminal. A later catalogue snapshot can be older or can
@@ -2942,6 +3156,8 @@ function trading_storage_observations_upsert(array $items): int
                   the settled payload with that snapshot. */
                end_at = IF(payload_checksum = VALUES(payload_checksum)
                    OR (lifecycle = 'RESOLVED' AND VALUES(lifecycle) <> 'RESOLVED'), end_at, VALUES(end_at)),
+               token_id = IF(payload_checksum = VALUES(payload_checksum)
+                   OR (lifecycle = 'RESOLVED' AND VALUES(lifecycle) <> 'RESOLVED'), token_id, VALUES(token_id)),
                market_probability = IF(payload_checksum = VALUES(payload_checksum)
                    OR (lifecycle = 'RESOLVED' AND VALUES(lifecycle) <> 'RESOLVED'), market_probability, VALUES(market_probability)),
                annualized_return = IF(payload_checksum = VALUES(payload_checksum)

@@ -221,6 +221,10 @@ jobs:
                   # settled-statistics source, but remain recoverable and must survive deploy
                   # cleanup for the same reason as the settled observation archive above.
                   "scraped-observation-archive",
+                  # Historical snapshots that never became a trade. They are kept out of
+                  # MySQL for quota control, but remain restorable and resolved rows still
+                  # feed the aggregate statistics fold.
+                  "untraded-observation-archive",
                   # Run-log archives predate the observation-retention mistake and are
                   # also runtime history rather than deploy artifacts.
                   "event-archive",

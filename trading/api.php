@@ -8182,6 +8182,13 @@ try {
             );
             respond(['ok' => true, 'operation' => 'restore-stale-scraped-observation-archives', 'result' => $result]);
         }
+        if ($operation === 'restore-untraded-observation-archives') {
+            $result = trading_storage_restore_untraded_observation_archives(
+                $pdo,
+                (int) ($storageRequest['limit'] ?? 250),
+            );
+            respond(['ok' => true, 'operation' => 'restore-untraded-observation-archives', 'result' => $result]);
+        }
         // Read-only, and added the day the paper histories were lost. Every paper portfolio's
         // trades now start within four seconds of 2026-09-12T08:54Z, the published segment
         // files were overwritten with that same state, and the mirror is the only place a
@@ -8665,19 +8672,46 @@ try {
             );
             respond(['ok' => true, 'operation' => 'archive-resolved-observations', 'batch' => $result]);
         }
-        // Old SCRAPED rows are snapshots, not settlements. Keep the operational seven-day
-        // window in MySQL and move older snapshots to their own restorable archive. The
-        // separate directory is important: the resolved-statistics fold reads only the
-        // settled archive, and a stale active snapshot must never enter those totals.
+        // Compatibility alias for the retired lifecycle-only cleanup. Existing manual tools
+        // must not be able to move a traded market just because its last snapshot was old, so
+        // route them through the trade-aware archival policy too.
         if ($operation === 'archive-stale-scraped-observations') {
             @set_time_limit(0);
             @ignore_user_abort(true);
-            $result = trading_storage_archive_stale_scraped_observations(
+            $result = trading_storage_archive_untraded_observations(
                 $pdo,
                 (int) ($storageRequest['limit'] ?? 2000),
-                (int) ($storageRequest['keepDays'] ?? 7),
+                (int) ($storageRequest['keepDays'] ?? 3),
             );
-            respond(['ok' => true, 'operation' => 'archive-stale-scraped-observations', 'batch' => $result]);
+            respond([
+                'ok' => true,
+                'operation' => 'archive-untraded-observations',
+                'legacyOperation' => 'archive-stale-scraped-observations',
+                'batch' => $result,
+            ]);
+        }
+        // Keep the MySQL working set small without losing the complete history of a market
+        // we actually traded. The read-only plan is exposed separately so maintenance can
+        // see the exact protected/archivable split before the first archival batch runs.
+        if ($operation === 'traded-observation-retention-plan') {
+            respond([
+                'ok' => true,
+                'operation' => 'traded-observation-retention-plan',
+                'plan' => trading_storage_traded_observation_retention_plan(
+                    $pdo,
+                    (int) ($storageRequest['keepDays'] ?? 3),
+                ),
+            ]);
+        }
+        if ($operation === 'archive-untraded-observations') {
+            @set_time_limit(0);
+            @ignore_user_abort(true);
+            $result = trading_storage_archive_untraded_observations(
+                $pdo,
+                (int) ($storageRequest['limit'] ?? 2000),
+                (int) ($storageRequest['keepDays'] ?? 3),
+            );
+            respond(['ok' => true, 'operation' => 'archive-untraded-observations', 'batch' => $result]);
         }
         // Read-only. What an observation row is made of, field by field, and what it
         // would weigh holding only what anything reads. See

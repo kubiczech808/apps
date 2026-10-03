@@ -1,15 +1,13 @@
-name: Archive Stale Scraped Trading Observations
+name: Archive Untraded Trading Observations
 
-# The active catalogue is a short-lived working set. Keeping every old SCRAPED snapshot in
-# MySQL made trading_observations grow without bound, although neither the dashboard nor the
-# executor reads rows older than the three-day freshness window. This job retains seven days,
-# writes anything older to a separate restorable gzip archive, verifies it, and only then
-# deletes the database rows.
+# MySQL is the fast operational working set, not the permanent catalogue. This job keeps the
+# newest three days for current scans and retains every older observation only when its token
+# is present in trading_trades. All other rows move to verified, restorable gzip archives.
 
 on:
   schedule:
-    # Offset from the settled-observation archive at :00/:30, so the two filesystem writers
-    # do not make the hosting decompress and compress separate archives at the same moment.
+    # Runs between the resolved archive (:00/:30) and other maintenance work. One writer at a
+    # time keeps shared hosting CPU and disk use predictable.
     - cron: "17,47 * * * *"
   workflow_dispatch:
     inputs:
@@ -22,24 +20,24 @@ on:
         required: false
         default: "2000"
       keep_days:
-        description: "Retain at least this many days of active snapshots (minimum is 7)"
+        description: "Keep this many recent days in the operational working set (minimum 3)"
         required: false
-        default: "7"
+        default: "3"
 
 jobs:
   archive:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     concurrency:
-      group: trading-archive-stale-scraped-observations
+      group: trading-archive-untraded-observations
       cancel-in-progress: false
     steps:
-      - name: Archive stale SCRAPED observations, verifying every batch
+      - name: Archive only observations without a real trade token
         env:
           TRADING_TRIGGER_KEY: ${{ secrets.POLYTRADING_DB_PASSWORD }}
           BATCHES: ${{ github.event.inputs.batches || '8' }}
           LIMIT: ${{ github.event.inputs.limit || '2000' }}
-          KEEP_DAYS: ${{ github.event.inputs.keep_days || '7' }}
+          KEEP_DAYS: ${{ github.event.inputs.keep_days || '3' }}
         run: |
           python3 - <<'PY'
           import json
@@ -51,7 +49,7 @@ jobs:
           url = "https://www.osobnizkusenosti.cz/trading/api.php?action=storage-admin"
           batches = max(1, min(40, int(os.environ.get("BATCHES") or 8)))
           limit = max(50, min(20000, int(os.environ.get("LIMIT") or 2000)))
-          keep_days = max(7, min(90, int(os.environ.get("KEEP_DAYS") or 7)))
+          keep_days = max(3, min(90, int(os.environ.get("KEEP_DAYS") or 3)))
 
           def call(payload, timeout=900):
               request = urllib.request.Request(
@@ -82,16 +80,21 @@ jobs:
                   "observationsMB": round(
                       ((observation.get("dataBytes") or 0) + (observation.get("indexBytes") or 0)) / 1048576, 1
                   ),
-                  "counts": status.get("counts") or {},
               }
 
+          before_plan = call({"operation": "traded-observation-retention-plan", "keepDays": keep_days})
+          print("Plan:", json.dumps(before_plan.get("plan") or {}))
           before = footprint()
           print("Before:", json.dumps(before))
+          plan = before_plan.get("plan") or {}
+          if not int(plan.get("tradeTokens") or 0):
+              raise SystemExit("STOP: trade mirror has no token identities; refusing archival.")
+
           archived = verified = deleted = 0
           done = False
           for index in range(batches):
               response = call({
-                  "operation": "archive-stale-scraped-observations",
+                  "operation": "archive-untraded-observations",
                   "limit": limit,
                   "keepDays": keep_days,
               })
@@ -105,21 +108,18 @@ jobs:
               print(
                   f"batch {index + 1}: archived {batch_archived}, verified {batch_verified}, "
                   f"deleted {batch_deleted}, remaining {batch.get('remaining')}, "
+                  f"protected {batch.get('protectedRows')}, "
                   f"{(batch.get('bytes') or 0) / 1048576:.1f} MB -> {batch.get('file')}"
               )
-              # The archive is the only reason deletion is permitted. Equality (not merely
-              # <=) catches both a dangerous extra delete and a misleading partial delete.
               if batch_deleted != batch_verified or batch_archived != batch_verified:
-                  raise SystemExit("STOP: an archive batch was not verified one-for-one before deletion.")
+                  raise SystemExit("STOP: a non-traded archive batch was not verified one-for-one before deletion.")
               if batch.get("done"):
                   done = True
                   break
 
           after = footprint()
+          after_plan = call({"operation": "traded-observation-retention-plan", "keepDays": keep_days})
           print(f"archived {archived}, verified {verified}, deleted {deleted}, done={done}")
           print("After:", json.dumps(after))
-          print(
-              "Rows are now reusable InnoDB space. The charged table size falls after the "
-              "separate, quota-checked schema rebuild; this job never risks that rebuild automatically."
-          )
+          print("After plan:", json.dumps(after_plan.get("plan") or {}))
           PY

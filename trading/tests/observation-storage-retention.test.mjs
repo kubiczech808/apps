@@ -7,7 +7,7 @@ const API = readFileSync(new URL("../api.php", import.meta.url), "utf8").replace
 const DEPLOY = readFileSync(
   new URL("../../.github/workflows/trading-deploy.yml", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 const RETENTION_WORKFLOW = readFileSync(
-  new URL("../../.github/workflows/trading-archive-stale-scraped-observations.yml", import.meta.url), "utf8",
+  new URL("../../.github/workflows/trading-archive-untraded-observations.yml", import.meta.url), "utf8",
 ).replace(/\r\n/g, "\n");
 const SCHEMA_WORKFLOW = readFileSync(
   new URL("../../.github/workflows/trading-storage-slim-observations.yml", import.meta.url), "utf8",
@@ -20,18 +20,20 @@ function body(name) {
   return STORAGE.slice(start, next < 0 ? undefined : next);
 }
 
-test("fresh observation storage has no duplicate projections beside the payload", () => {
+test("fresh observation storage keeps only the trade join beside the queryable scope and payload", () => {
   const start = STORAGE.indexOf("CREATE TABLE IF NOT EXISTS trading_observations");
   assert.ok(start >= 0, "observation table DDL must exist");
   const schema = STORAGE.slice(start, STORAGE.indexOf("    );", start));
 
   for (const redundant of [
-    "source_id", "token_id", "event_slug", "market_slug", "outcome_label", "market_type",
+    "source_id", "event_slug", "market_slug", "outcome_label", "market_type",
     "observed_at", "resolved_at", "net_yield", "tags_json",
   ]) {
     assert.ok(!schema.includes(redundant), `${redundant} must not be projected in new rows`);
   }
   assert.match(schema, /observation_key CHAR\(64\) CHARACTER SET ascii COLLATE ascii_bin/);
+  assert.match(schema, /token_id VARCHAR\(191\) CHARACTER SET ascii COLLATE ascii_bin/,
+    "the retained token joins an observation to a real trade during archival");
   assert.match(schema, /payload_checksum CHAR\(64\) CHARACTER SET ascii COLLATE ascii_bin/);
   assert.match(schema, /payload MEDIUMBLOB NOT NULL/);
   assert.match(schema, /payload_checksum CHAR\(64\)/);
@@ -42,14 +44,14 @@ test("writes and archive restores work before and after the deliberate schema mi
   const restore = body("trading_storage_restore_observation_archives_from_root");
   assert.match(upsert, /trading_storage_observations_use_lean_schema\(\$pdo\)/);
   assert.match(upsert, /source_id, token_id, event_slug/, "legacy writes remain supported until slim migration runs");
-  assert.match(upsert, /observation_key, lifecycle, end_at, market_probability, annualized_return, volume_usdc/,
+  assert.match(upsert, /observation_key, lifecycle, token_id, end_at, market_probability, annualized_return, volume_usdc/,
     "lean writes retain exactly the queryable execution scope");
   assert.match(upsert, /payload_checksum = IF\(/, "checksum remains the terminal-update guard");
   assert.match(restore, /trading_storage_observation_insert_ignore_statement/);
   assert.match(restore, /trading_storage_observation_statement_bindings/);
 });
 
-test("stale scraped snapshots are separately restorable and never enter settled statistics", () => {
+test("legacy stale scraped snapshots remain separately restorable and never enter settled statistics", () => {
   const archive = body("trading_storage_archive_stale_scraped_observations");
   const archivedStream = body("trading_storage_stream_archived_observations");
   assert.match(archive, /scraped-observation-archive/);
@@ -65,11 +67,45 @@ test("stale scraped snapshots are separately restorable and never enter settled 
   assert.match(body("trading_storage_restore_stale_scraped_observation_archives"), /scraped-observation-archive/);
 });
 
-test("retention is scheduled, rate-limited, and survives deploy cleanup", () => {
+test("trade-aware retention keeps actual positions and archives only old non-traded snapshots", () => {
+  const plan = body("trading_storage_traded_observation_retention_plan");
+  const archive = body("trading_storage_archive_untraded_observations");
+  const archivedStream = body("trading_storage_stream_archived_observations");
+  assert.match(plan, /FROM trading_trades/, "the retention plan must be derived from actual trades");
+  assert.match(plan, /protected_rows/, "the plan reports how many observation rows are protected");
+  assert.match(plan, /\$keepDays = max\(3, min\(90, \$keepDays\)\)/,
+    "the current operational working set cannot be reduced below three days");
+  assert.match(archive, /untraded-observation-archive/);
+  assert.match(archive, /\$tradedTokens = '\(SELECT DISTINCT token_id FROM trading_trades/,
+    "the selected rows must have no durable trade-token match");
+  assert.match(archive, /WHERE t\.token_id IS NULL/,
+    "only observations without that real-trade token may be selected");
+  assert.match(archive, /DELETE o FROM trading_observations o/,
+    "delete must repeat the predicate instead of trusting an earlier select");
+  assert.match(archive, /trading_storage_count_archived_rows\(\$path\)/,
+    "a gzip archive is reopened and verified before deletion");
+  assert.match(archivedStream, /untraded-observation-archive/,
+    "resolved non-traded history still participates in aggregate statistics");
+  assert.match(archivedStream, /\$lifecycle !== 'RESOLVED'/,
+    "SCRAPED snapshots from that mixed archive must never be counted as outcomes");
+  assert.match(body("trading_storage_restore_untraded_observation_archives"), /untraded-observation-archive/);
+  const schemaPlan = body("trading_storage_observation_schema_plan");
+  const slim = body("trading_storage_slim_observations_schema");
+  assert.doesNotMatch(schemaPlan, /'token_id',/,
+    "the slim schema plan must preserve the relation to historical trades");
+  assert.match(slim, /MODIFY `token_id` VARCHAR\(191\) CHARACTER SET ascii COLLATE ascii_bin NULL/);
+});
+
+test("trade-aware retention is scheduled, rate-limited, and survives deploy cleanup", () => {
   assert.match(RETENTION_WORKFLOW, /cron: "17,47 \* \* \* \*"/);
-  assert.match(RETENTION_WORKFLOW, /"operation": "archive-stale-scraped-observations"/);
+  assert.match(RETENTION_WORKFLOW, /"operation": "traded-observation-retention-plan"/);
+  assert.match(RETENTION_WORKFLOW, /"operation": "archive-untraded-observations"/);
+  assert.match(RETENTION_WORKFLOW, /trade mirror has no token identities/,
+    "the schedule must refuse a destructive empty-trade-mirror run");
   assert.match(RETENTION_WORKFLOW, /batch_deleted != batch_verified or batch_archived != batch_verified/,
     "a partial archive may not claim success");
+  assert.match(DEPLOY, /"untraded-observation-archive"/,
+    "deployment cleanup must retain the trade-aware recovery archive");
   assert.match(DEPLOY, /"scraped-observation-archive"/,
     "deployment cleanup must retain the recovery archive");
 });
