@@ -8095,7 +8095,7 @@ test("limit orders: a portfolio without the setting still fills at the market as
 });
 
 test("limit orders: a portfolio with the setting rests at the best bid instead of paying the ask", () => {
-  const strategy = { ...bot.PAPER_STRATEGIES.conservative, useLimitOrders: true };
+  const strategy = { ...bot.PAPER_STRATEGIES.conservative, orderMode: "limit", useLimitOrders: true };
   const best = candidateFixture({ volumeUsdc: 9876.54 });
   const trade = bot.openPaperTradeForStrategy(best, strategy, "2026-08-18", 5);
   assert.equal(trade.status, "LIMIT_ORDER_WAITING", "must not be booked as an already-filled position");
@@ -8108,7 +8108,7 @@ test("limit orders: a portfolio with the setting rests at the best bid instead o
 });
 
 test("limit orders: a resting maker buy reserves no taker fee", () => {
-  const strategy = { ...bot.PAPER_STRATEGIES.conservative, useLimitOrders: true };
+  const strategy = { ...bot.PAPER_STRATEGIES.conservative, orderMode: "limit", useLimitOrders: true };
   const trade = bot.openPaperTradeForStrategy(candidateFixture({
     feesEnabled: true,
     feeRate: 0.02,
@@ -8130,11 +8130,55 @@ test("limit orders: a resting maker buy reserves no taker fee", () => {
 test("limit orders: with no usable bid, the order still falls back to a market fill", () => {
   // A thin book with no visible bid cannot be rested on; opening nothing at all would
   // silently drop the candidate the portfolio ranking already chose.
-  const strategy = { ...bot.PAPER_STRATEGIES.conservative, useLimitOrders: true };
+  const strategy = { ...bot.PAPER_STRATEGIES.conservative, orderMode: "limit", useLimitOrders: true };
   for (const bestBid of [null, undefined, 0, 1, NaN]) {
     const trade = bot.openPaperTradeForStrategy(candidateFixture({ bestBid }), strategy, "2026-08-18", 5);
     assert.equal(trade.status, "OPEN", `bestBid=${bestBid} must fall back to a market fill`);
   }
+});
+
+test("auto orders: a tight book buys at the ask, while a wider book creates a resting bid", () => {
+  const strategy = { ...bot.PAPER_STRATEGIES.conservative, orderMode: "auto", useLimitOrders: false };
+  const tight = candidateFixture({ bestBid: 0.69, bestAsk: 0.7 });
+  const tightDecision = bot.paperOrderDecision(tight, strategy);
+  assert.equal(tightDecision.mode, "market");
+  assert.equal(tightDecision.entryPrice, 0.7);
+  assert.equal(bot.openPaperTradeForStrategy(tight, strategy, "2026-08-18", 5).status, "OPEN");
+
+  const wide = candidateFixture({ bestBid: 0.65, bestAsk: 0.7 });
+  const wideDecision = bot.paperOrderDecision(wide, strategy);
+  assert.equal(wideDecision.mode, "limit");
+  assert.equal(wideDecision.entryPrice, 0.65);
+  const resting = bot.openPaperTradeForStrategy(wide, strategy, "2026-08-18", 5);
+  assert.equal(resting.status, "LIMIT_ORDER_WAITING");
+  assert.equal(resting.totalCostUsdc, 5, "a post-only Auto bid reserves stake without a taker fee");
+});
+
+test("auto orders: an incomplete book is ineligible instead of falling back to an unbounded market buy", () => {
+  const strategy = {
+    ...bot.PAPER_STRATEGIES.equal,
+    orderMode: "auto",
+    useLimitOrders: false,
+    minProbability: 0.6,
+    maxProbability: 0.8,
+    minNetYield: 0,
+  };
+  const candidate = candidateFixture({
+    bestBid: null,
+    bestAsk: 0.7,
+    marketPrice: 0.7,
+    status: "ELIGIBLE",
+    selectionStatus: "ELIGIBLE",
+    marketActive: true,
+    acceptingOrders: true,
+    volumeUsdc: 100000,
+    liquidity: 100000,
+    eventStarted: true,
+    daysToResolution: 1,
+  });
+  const filtered = bot.portfolioFilterResult(candidate, strategy);
+  assert.equal(filtered.eligible, false);
+  assert.match(filtered.reasons.join(" "), /Auto order mode needs a current best bid and ask/);
 });
 
 test("limit orders: filled when the ask reaches the resting price, discarded unfilled once the event ends", () => {

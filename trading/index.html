@@ -597,7 +597,7 @@
           </select>
           <strong data-execution-trigger-label>Scheduled cron</strong>
         </label>
-        <label class="parameter-control order-mode-toggle">
+        <label class="parameter-control order-mode-toggle" title="Auto uses a market order only when the CLOB spread is at most $0.01; otherwise it leaves a limit order at the best bid. The actual entry price must stay inside the portfolio probability band.">
           <span>Automatic position rotation</span>
           <input type="checkbox" data-auto-rotate-positions>
           <strong data-auto-rotate-positions-label>On</strong>
@@ -725,8 +725,12 @@
           </div>
         </div>
         <label class="parameter-control order-mode-toggle">
-          <input type="checkbox" data-limit-orders>
-          <span>Use limit orders</span>
+          <span>Order mode</span>
+          <select data-order-mode>
+            <option value="market">Market</option>
+            <option value="limit">Limit</option>
+            <option value="auto">Auto</option>
+          </select>
         </label>
       </div>
       <div class="parameter-modal-footer">
@@ -744,6 +748,6 @@
 
   <!-- Bump on every assets/app.js change. The browser caches this exact URL, so a deploy
        that leaves it alone publishes the new file and keeps serving the old one. -->
-  <script src="assets/app.js?v=20260923-market-shapes-ownership"></script>
+  <script src="assets/app.js?v=20261003-auto-order-mode"></script>
 </body>
 </html>

@@ -327,7 +327,7 @@ test("the card is ordered the way the form is", () => {
     "Included tags": "data-include-only-tags",
     "Excluded tags": "data-excluded-tags",
     "Excluded shapes": "data-exclude-market-shape",
-    "Order mode": "data-limit-orders",
+    "Order mode": "data-order-mode",
   };
   const labels = buildRows(CONFIG, { mode: "paper-x" }).map(([label]) => label);
   const positions = labels.map((label) => {

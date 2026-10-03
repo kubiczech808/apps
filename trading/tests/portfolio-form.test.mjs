@@ -153,6 +153,7 @@ test("copying a portfolio carries the dip rule, checkbox included", () => {
   // is built from, and the rule the checkbox reads.
   const chain = new Function("customLivePortfolioDefaults", "normalizePortfolioName", "normalizePortfolioAccountType", "parameterCapitalContextForMode", `
     const DIP_ENTRY_RULE_DEFAULTS = { openMin: 0.7, openMax: 0.8, buyMin: 0.2, buyMax: 0.3 };
+    ${extract(/function portfolioCopyPrefill[\s\S]*?\n\}/, "portfolioCopyPrefill")}
     ${extract(/function dipEntryBound[\s\S]*?\n\}/, "dipEntryBound")}
     ${extract(/function dipEntryRuleFromConfig[\s\S]*?\n\}/, "dipEntryRuleFromConfig")}
     ${extract(/function livePrefillFromPaperPortfolio[\s\S]*?\n\}/, "livePrefillFromPaperPortfolio")}
@@ -220,6 +221,7 @@ test("Save reads every editable copied-portfolio setting directly from the form"
     const normalizeExecutionCronMinutes = (value) => Number(value);
     const normalizeStopLossRiskMultiplier = (value) => Number(value);
     const normalizeFixedEntryPrice = (value) => Number(value);
+    const normalizeOrderMode = (value) => String(value || "").toLowerCase();
     const normalizeMarketTagList = (value) => String(value || "").split(",").filter(Boolean);
     ${extract(/function parameterDraftFromControls[\s\S]*?\n\}/, "parameterDraftFromControls")}
     return parameterDraftFromControls({ minProbability: 0.5, maxProbability: null, stopLossProbabilityFloor: 0 });
@@ -252,7 +254,7 @@ test("Save reads every editable copied-portfolio setting directly from the form"
       { checked: true, dataset: { excludeMarketShape: "over-under" } },
       { checked: false, dataset: { excludeMarketShape: "spread" } },
     ],
-    limitOrders: { checked: true },
+    orderMode: input("auto"),
   });
 
   assert.deepEqual({
@@ -269,6 +271,7 @@ test("Save reads every editable copied-portfolio setting directly from the form"
     cron: result.executionCronMinutes,
     rotate: result.autoRotatePositions,
     shapes: result.excludedMarketShapes,
+    orderMode: result.orderMode,
     limitOrders: result.useLimitOrders,
   }, {
     name: "Copied and edited",
@@ -284,7 +287,8 @@ test("Save reads every editable copied-portfolio setting directly from the form"
     cron: 120,
     rotate: false,
     shapes: ["over-under"],
-    limitOrders: true,
+    orderMode: "auto",
+    limitOrders: false,
   });
   assert.equal(result.excludeOverUnderMarkets, true);
   assert.deepEqual(result.includeOnlyMarketTags, ["football"]);

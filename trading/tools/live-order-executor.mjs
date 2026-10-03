@@ -146,7 +146,21 @@ function formatHorizonHours(hours) {
 }
 const SELECTION_ORDER = process.env.LIVE_SELECTION_ORDER === "highest_reward_risk_first" ? "highest_reward_risk_first" : "highest_ev_pa_first";
 const ORDER_SIZE_MODE = String(process.env.LIVE_ORDER_SIZE_MODE || "stake_fraction").toLowerCase();
-const USE_LIMIT_ORDERS = String(process.env.USE_LIMIT_ORDERS ?? "true").toLowerCase() !== "false";
+// CLOB prices are USDC per share, so $0.01 is exactly one probability point. Auto crosses
+// only that tight a book; otherwise it leaves a post-only bid at the current best bid.
+const AUTO_MARKET_MAX_SPREAD = 0.01;
+function normalizeOrderMode(value, legacyUseLimitOrders = false) {
+  const mode = String(value || "").trim().toLowerCase();
+  if (["market", "limit", "auto"].includes(mode)) return mode;
+  return legacyUseLimitOrders ? "limit" : "market";
+}
+const ORDER_MODE = normalizeOrderMode(
+  process.env.LIVE_ORDER_MODE,
+  String(process.env.USE_LIMIT_ORDERS ?? "true").toLowerCase() !== "false",
+);
+// Compatibility for the parts of the executor that concern a portfolio-wide fixed-entry
+// strategy. Candidate entries use their own resolved mode below.
+const USE_LIMIT_ORDERS = ORDER_MODE === "limit";
 const CROSS_PORTFOLIO_RISK_DIVERSIFICATION = String(process.env.LIVE_CROSS_PORTFOLIO_RISK_DIVERSIFICATION ?? "true").toLowerCase() !== "false";
 const POST_ONLY = String(process.env.POLYMARKET_POST_ONLY ?? "true").toLowerCase() !== "false";
 const DRY_RUN = String(process.env.POLYMARKET_DRY_RUN ?? "true").toLowerCase() !== "false";
@@ -2960,20 +2974,55 @@ function orderPriceBandRejection(price, { min, max = null, spread = null } = {})
   return `order price ${shown}${spreadNote} is outside the portfolio band ${band}`;
 }
 
-function orderPriceForBook(book, tick, { forceTakerEntry = false } = {}) {
-  // Completing a rotation buys what the sell leg already paid for, so it takes the ask
-  // instead of resting under it. Resting here is what left the swap half-done.
-  if (!USE_LIMIT_ORDERS || ROTATION_ENTRY_CROSSES_SPREAD || forceTakerEntry) return book.bestAsk;
-  if (book.bestBid != null && book.bestAsk != null && book.bestBid < book.bestAsk) return roundToTick(book.bestBid, tick, "down");
-  if (book.bestAsk != null) return roundToTick(book.bestAsk - tick, tick, "down");
-  return null;
+function orderDecisionForBook(book, tick, { orderMode = ORDER_MODE, forceTakerEntry = false } = {}) {
+  // Completing a rotation buys what the sell leg already paid for, so it always takes the
+  // ask instead of resting under it. Resting here is what left the swap half-done.
+  if (ROTATION_ENTRY_CROSSES_SPREAD || forceTakerEntry) {
+    return { requestedMode: orderMode, mode: "market", price: book.bestAsk, spread: book.spread };
+  }
+  const requestedMode = normalizeOrderMode(orderMode, USE_LIMIT_ORDERS);
+  const bestBid = number(book.bestBid);
+  const bestAsk = number(book.bestAsk);
+  const usableBid = bestBid != null && bestBid > 0 && bestBid < 1;
+  const usableAsk = bestAsk != null && bestAsk > 0 && bestAsk < 1;
+  if (requestedMode === "auto") {
+    if (!usableBid || !usableAsk || bestAsk < bestBid) {
+      return {
+        requestedMode,
+        mode: null,
+        price: null,
+        spread: null,
+        rejection: "Auto order mode needs a current best bid and ask",
+      };
+    }
+    const spread = bestAsk - bestBid;
+    if (spread <= AUTO_MARKET_MAX_SPREAD + 0.0000001) {
+      return { requestedMode, mode: "market", price: bestAsk, spread };
+    }
+    return { requestedMode, mode: "limit", price: roundToTick(bestBid, tick, "down"), spread };
+  }
+  if (requestedMode === "market") {
+    return { requestedMode, mode: "market", price: bestAsk, spread: book.spread };
+  }
+  if (usableBid && usableAsk && bestBid < bestAsk) {
+    return { requestedMode, mode: "limit", price: roundToTick(bestBid, tick, "down"), spread: bestAsk - bestBid };
+  }
+  if (usableAsk) {
+    return { requestedMode, mode: "limit", price: roundToTick(bestAsk - tick, tick, "down"), spread: book.spread };
+  }
+  return { requestedMode, mode: "limit", price: null, spread: book.spread };
 }
 
-function sharesForOrder({ price, minOrderSize, maxNotional, cash, feeRate = 0, forceTakerEntry = false }) {
+function orderPriceForBook(book, tick, options = {}) {
+  return orderDecisionForBook(book, tick, options).price;
+}
+
+function sharesForOrder({ price, minOrderSize, maxNotional, cash, feeRate = 0, forceTakerEntry = false, isLimitOrder = null }) {
   const targetStake = Math.max(0, number(maxNotional, 0));
   const availableCash = Math.max(0, number(cash, 0));
-  const takerEntry = ROTATION_ENTRY_CROSSES_SPREAD || forceTakerEntry;
-  const appliedFeeRate = USE_LIMIT_ORDERS && POST_ONLY && !takerEntry ? 0 : Math.max(0, number(feeRate, 0));
+  const restsOnBook = isLimitOrder == null ? USE_LIMIT_ORDERS : Boolean(isLimitOrder);
+  const takerEntry = !restsOnBook || ROTATION_ENTRY_CROSSES_SPREAD || forceTakerEntry;
+  const appliedFeeRate = restsOnBook && POST_ONLY && !takerEntry ? 0 : Math.max(0, number(feeRate, 0));
   const costPerShare = price * (1 + appliedFeeRate * (1 - price));
   const minNotional = price * minOrderSize;
   const minimumOrderFee = appliedFeeRate > 0 ? takerFee(minOrderSize, price, appliedFeeRate) : 0;
@@ -3009,7 +3058,7 @@ function sharesForOrder({ price, minOrderSize, maxNotional, cash, feeRate = 0, f
   }
   const belowExchangeMinimum = size > 0 && size + 0.000001 < minOrderSize;
   const orderNotional = size > 0 ? price * size : 0;
-  const makerPrecisionBlocked = USE_LIMIT_ORDERS && POST_ONLY && !takerEntry && size > 0 && orderNotional < 0.01 - 0.000001;
+  const makerPrecisionBlocked = restsOnBook && POST_ONLY && !takerEntry && size > 0 && orderNotional < 0.01 - 0.000001;
 
   return {
     size: size > 0 ? Number(size.toFixed(4)) : null,
@@ -3109,8 +3158,10 @@ async function revalidateEvaluation(
   const book = bestBook(await fetchJson(new URL(`/book?token_id=${evaluation.tokenId}`, CLOB_HOST), `CLOB book ${evaluation.tokenId}`));
   const tick = number(clobMarket?.mts ?? market.orderPriceMinTickSize ?? evaluation.tickSize, 0.01);
   const minOrderSize = number(clobMarket?.mos, EXCHANGE_MIN_ORDER_SIZE);
-  const takerEntry = ROTATION_ENTRY_CROSSES_SPREAD || forceTakerEntry;
-  const price = orderPriceForBook(book, tick, { forceTakerEntry });
+  const orderDecision = orderDecisionForBook(book, tick, { forceTakerEntry });
+  const isLimitOrder = orderDecision.mode === "limit";
+  const takerEntry = !isLimitOrder;
+  const price = orderDecision.price;
   if (!Number.isFinite(price) || price <= 0 || price >= 1) {
     // An empty book is ordinarily transient, and rejecting it terminally would close out a
     // market that is merely quiet for a moment. But Gamma is slow to close a finished
@@ -3142,9 +3193,13 @@ async function revalidateEvaluation(
         ],
       };
     }
-    return { candidate: evaluation, eligible: false, rejectReasons: ["no valid current entry price"] };
+    return {
+      candidate: evaluation,
+      eligible: false,
+      rejectReasons: [orderDecision.rejection || "no valid current entry price"],
+    };
   }
-  if (USE_LIMIT_ORDERS && POST_ONLY && !takerEntry && book.bestAsk != null && price >= book.bestAsk) {
+  if (isLimitOrder && POST_ONLY && book.bestAsk != null && price >= book.bestAsk) {
     return { candidate: evaluation, eligible: false, rejectReasons: ["post-only limit would cross current ask"] };
   }
   // The probability band is a rule about what this portfolio enters at, and `price` is
@@ -3202,6 +3257,7 @@ async function revalidateEvaluation(
     cash,
     feeRate: estimatedFeeRate,
     forceTakerEntry,
+    isLimitOrder,
   });
   const size = orderSizing.size;
   if (!Number.isFinite(size) || orderSizing.minimumFundingBlocked) {
@@ -3352,7 +3408,7 @@ async function revalidateEvaluation(
   // row stops showing a figure captured whenever it was last scraped.
   const volumeUsdc = number(market.volumeNum, number(market.volume, volume24hr));
   const notional = Number((price * size).toFixed(5));
-  const fee = USE_LIMIT_ORDERS && POST_ONLY && !takerEntry ? 0 : takerFee(size, price, estimatedFeeRate);
+  const fee = isLimitOrder && POST_ONLY ? 0 : takerFee(size, price, estimatedFeeRate);
   const totalCost = notional + fee;
   const expectedValue = Number.isFinite(aiProbability) ? aiProbability * size - notional - fee : null;
   const expectedRoi = Number.isFinite(expectedValue) && totalCost > 0 ? expectedValue / totalCost : null;
@@ -3440,8 +3496,10 @@ async function revalidateEvaluation(
     riskReward: Number.isFinite(potentialRoi) ? Number(potentialRoi.toFixed(6)) : null,
     totalCostUsdc: Number(totalCost.toFixed(5)),
     tradingFeeUsdc: Number(fee.toFixed(5)),
-    feeMode: USE_LIMIT_ORDERS && POST_ONLY && !takerEntry ? "post-only maker fee assumed 0" : "taker fee estimate",
-    orderType: USE_LIMIT_ORDERS && !takerEntry ? "GTC" : "FAK",
+    requestedOrderMode: orderDecision.requestedMode,
+    orderMode: orderDecision.mode,
+    feeMode: isLimitOrder && POST_ONLY ? "post-only maker fee assumed 0" : "taker fee estimate",
+    orderType: isLimitOrder ? "GTC" : "FAK",
     riskGroupKeys: risk.keys,
     riskGroupLabels: risk.labels,
     score: Number((selectedReturnYield + (PROBABILITY_SOURCE === "polymarket" ? qualificationProbability - price : edge)).toFixed(6)),
@@ -4210,7 +4268,8 @@ async function submitOrder(order) {
     // Whichever ran last is the outcome; the attempt list explains how it got there.
     return { ...(marketSigned || {}), exitAttempts: attempts };
   }
-  if (!USE_LIMIT_ORDERS || forceTaker) {
+  const isRestingLimit = !forceTaker && String(order.orderType || "").toUpperCase() === "GTC";
+  if (!isRestingLimit) {
     const marketOrder = await client.createMarketOrder(
       {
         tokenID: order.tokenId,
@@ -4254,7 +4313,7 @@ async function submitOrderWithMakerPrecisionRecovery(order) {
   const minOrderSize = number(order.minOrderSize);
   if (
     successfulOrderResponse(response)
-    || !USE_LIMIT_ORDERS
+    || String(order.orderType || "").toUpperCase() !== "GTC"
     || side !== "BUY"
     || !isMakerAmountPrecisionError(response)
     || minOrderSize == null
@@ -4530,7 +4589,9 @@ function resizeCandidateForMakerPrecision(candidate, size) {
   const feeRate = feeRateForEvaluation(candidate);
   // Same rule as the sizing above: a rotation entry crosses the spread, so its resized
   // economics have to carry the taker fee too, or the row would disagree with the order.
-  const fee = USE_LIMIT_ORDERS && POST_ONLY && !ROTATION_ENTRY_CROSSES_SPREAD ? 0 : takerFee(size, price, feeRate);
+  const fee = String(candidate.orderType || "").toUpperCase() === "GTC" && POST_ONLY && !ROTATION_ENTRY_CROSSES_SPREAD
+    ? 0
+    : takerFee(size, price, feeRate);
   const notional = Number((price * size).toFixed(5));
   const totalCost = notional + fee;
   const aiProbability = number(candidate.aiProbability);
@@ -5905,6 +5966,7 @@ async function main() {
     },
     monitoring,
     settings: {
+      orderMode: ORDER_MODE,
       useLimitOrders: USE_LIMIT_ORDERS,
       crossPortfolioRiskDiversification: CROSS_PORTFOLIO_RISK_DIVERSIFICATION,
       liveAutoRotate: LIVE_AUTO_ROTATE,
@@ -5977,6 +6039,7 @@ async function main() {
       explanation: actionExplanation,
       humanReason: rotationHumanReason || null,
       settings: {
+        orderMode: ORDER_MODE,
         minProbability: MIN_PROBABILITY,
         maxProbability: MAX_PROBABILITY,
         marketType: PORTFOLIO_MARKET_TYPE,
@@ -6577,6 +6640,9 @@ export {
   positionRotationEconomics,
   rotationNetProfitGuard,
   orderPriceForBook,
+  orderDecisionForBook,
+  normalizeOrderMode,
+  AUTO_MARKET_MAX_SPREAD,
   orderPriceBandRejection,
   candidateMarketType,
   finishedAwaitingResolutionRejection,

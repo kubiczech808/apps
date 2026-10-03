@@ -343,6 +343,7 @@ jobs:
               # the ask: cheaper on fill, but only fills if the market comes to meet it,
               # and is discarded unfilled once the event ends. Default off, unchanged
               # behavior for every portfolio that has not turned it on.
+              emit(f"{prefix}_ORDER_MODE", row.get("orderMode"))
               emit(f"{prefix}_USE_LIMIT_ORDERS", str(bool(row.get("useLimitOrders"))).lower())
               emit(f"{prefix}_MARKET_TYPE", row.get("marketType"))
               emit(f"{prefix}_EXCLUDE_OVER_UNDER_MARKETS", str(bool(row.get("excludeOverUnderMarkets", False))).lower())

@@ -1613,7 +1613,7 @@ test("paper portfolio rules: 'Order mode' is shown, mirroring the live card", ()
   // which is what this was defending. It reads the SAVED setting rather than the checkbox's
   // current position, and tests/portfolio-parameter-card runs it against a real config.
   const rows = extractFunction(APP, "portfolioParameterRows");
-  assert.match(rows, /\["Order mode", config\.useLimitOrders \? "limit" : "market"\],/);
+  assert.match(rows, /\["Order mode", orderModeLabel\(normalizeOrderMode\(config\.orderMode, config\.useLimitOrders\)\)\],/);
   for (const card of ["portfolioRuleRows", "livePortfolioRuleRows"]) {
     assert.match(extractFunction(APP, card), /portfolioParameterRows\(config, \{/,
       `the ${card} card must be built by the shared list`);

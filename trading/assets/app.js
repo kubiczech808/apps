@@ -102,8 +102,7 @@ const state = {
   eligibilityThresholdKey: "",
   riskAllocation: null,
   riskAllocationKey: "",
-  limitOrders: null,
-  limitOrdersKey: "",
+  orderMode: null,
   liveExecutionArmed: false,
   liveExecutionState: null,
   // A live execution state can be several MB because it is an audit ledger. It is only
@@ -252,7 +251,6 @@ const SCRAPED_MARKET_TYPE_QUERY_PARAM = "marketType";
 const SCRAPED_SHAPE_QUERY_PARAM = "shape";
 const RISK_ALLOCATION_STORAGE_KEY = "tradingStakeUsdc";
 const LEGACY_RISK_ALLOCATION_STORAGE_KEY = "tradingRiskAllocationFraction";
-const LIMIT_ORDERS_STORAGE_KEY = "tradingUseLimitOrders";
 const MODE_STORAGE_KEY = "tradingDashboardMode";
 const LIVE_EXECUTION_STORAGE_KEY = "tradingLiveExecutionArmed";
 const RUN_LOG_FILTER_STORAGE_PREFIX = "tradingRunLogStatusFilter";
@@ -446,7 +444,7 @@ const els = {
   marketShapeCheckboxes: document.querySelectorAll("[data-exclude-market-shape]"),
   crossLiveRisk: document.querySelector("[data-cross-live-risk]"),
   capitalStatus: document.querySelector("[data-capital-status]"),
-  limitOrders: document.querySelector("[data-limit-orders]"),
+  orderMode: document.querySelector("[data-order-mode]"),
   executionButtons: document.querySelectorAll("[data-one-time-execution]"),
   executionStatus: document.querySelector("[data-execution-status]"),
   accountSyncPolicy: document.querySelector("[data-account-sync-policy]"),
@@ -4198,7 +4196,7 @@ function evaluationEntryPrice(item) {
 }
 
 function evaluationTradingFee(item) {
-  if (currentLimitOrders()) return 0;
+  if (String(item?.executionMode || "").toUpperCase() === "LIMIT_BUY" || currentOrderMode() === "limit") return 0;
   if (binarySideQuoteIsStale(item)) {
     const stake = evaluationStake(item);
     const price = evaluationEntryPrice(item);
@@ -6747,10 +6745,6 @@ function riskAllocationStorageKey() {
   return accountScopedStorageKey(RISK_ALLOCATION_STORAGE_KEY);
 }
 
-function limitOrdersStorageKey() {
-  return accountScopedStorageKey(LIMIT_ORDERS_STORAGE_KEY);
-}
-
 function storedEligibilityThreshold(mode = state.mode) {
   try {
     const scopedKey = eligibilityThresholdStorageKey(mode);
@@ -6945,54 +6939,32 @@ function syncRiskAllocationControl(availableCapital = null, sourceLabel = "avail
   });
 }
 
-function defaultLimitOrdersForMode(mode = state.mode) {
-  return isLivePortfolioMode(mode);
+function normalizeOrderMode(value, legacyUseLimitOrders = false) {
+  const mode = String(value || "").trim().toLowerCase();
+  if (["market", "limit", "auto"].includes(mode)) return mode;
+  return legacyUseLimitOrders ? "limit" : "market";
 }
 
-function storedLimitOrders() {
-  try {
-    const key = limitOrdersStorageKey();
-    const scoped = localStorage.getItem(key);
-    if (scoped === "true") return true;
-    if (scoped === "false") return false;
-    const legacy = localStorage.getItem(LIMIT_ORDERS_STORAGE_KEY);
-    if (legacy === "true") return true;
-    if (legacy === "false") return false;
-    return null;
-  } catch {
-    return null;
-  }
+function orderModeLabel(value) {
+  const mode = normalizeOrderMode(value);
+  if (mode === "auto") return "auto - market through $0.01 spread, otherwise limit";
+  return mode;
 }
 
-function saveLimitOrders(value) {
-  try {
-    const key = limitOrdersStorageKey();
-    localStorage.setItem(key, value ? "true" : "false");
-    state.limitOrdersKey = key;
-  } catch {
-    // Ignore localStorage failures; the control still works for this page load.
-  }
+function currentOrderMode(mode = state.mode) {
+  const config = portfolioConfigForMode(mode);
+  return normalizeOrderMode(config.orderMode, Boolean(config.useLimitOrders));
 }
 
-function currentLimitOrders(mode = state.mode) {
-  const configured = portfolioConfigForMode(mode).useLimitOrders;
-  return typeof configured === "boolean" ? configured : defaultLimitOrdersForMode(mode);
+function refreshOrderMode() {
+  // Saved portfolio configuration is the source of truth. The browser does not get to
+  // turn an explicitly saved Auto setting back into a legacy checkbox preference.
+  state.orderMode = currentOrderMode(state.mode);
+  syncOrderModeControl();
 }
 
-function refreshLimitOrders() {
-  const key = limitOrdersStorageKey();
-  // Saved portfolio configuration is the source of truth. Local storage remains a
-  // harmless record for older browser sessions, but it must never override a saved
-  // mode or make the summary disagree with the executor.
-  state.limitOrders = currentLimitOrders(state.mode);
-  state.limitOrdersKey = key;
-  syncLimitOrdersControl();
-}
-
-function syncLimitOrdersControl() {
-  if (els.limitOrders) {
-    els.limitOrders.checked = currentLimitOrders();
-  }
+function syncOrderModeControl() {
+  if (els.orderMode) els.orderMode.value = currentOrderMode();
 }
 
 function parameterCapitalContextForMode(mode = state.mode) {
@@ -7080,7 +7052,7 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   const threshold = normalizeEligibilityThreshold(config.minProbability) ?? thresholdDefaultForMode(mode);
   const maxThreshold = normalizeOptionalProbability(config.maxProbability);
   const allocation = normalizeRiskAllocation(config.stakeUsdc) ?? DEFAULT_RISK_ALLOCATION;
-  const limitOrders = config.useLimitOrders ?? isLive;
+  const orderMode = normalizeOrderMode(config.orderMode, config.useLimitOrders ?? isLive);
   const capitalContext = options.capitalContext || parameterCapitalContextForMode(mode);
   // A modal draft is authoritative while it is being edited. Refreshes happen for scans,
   // account state and other controls; none may repaint the focused field from an older
@@ -7112,7 +7084,7 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   }
   if (els.maxEligibilityThresholdLabel) els.maxEligibilityThresholdLabel.textContent = maxThreshold == null ? "No maximum" : probability(maxThreshold);
   syncDraftRiskAllocationControl(allocation, capitalContext);
-  if (els.limitOrders && !keepTypedValue(els.limitOrders)) els.limitOrders.checked = Boolean(limitOrders);
+  if (els.orderMode && !keepTypedValue(els.orderMode)) els.orderMode.value = orderMode;
   // Hidden under "only events under way": that mode admits nothing by its horizon, so the
   // number would sit there asking to be set while changing nothing. The saved value is
   // left untouched underneath, so switching back restores the horizon that was there.
@@ -7276,7 +7248,7 @@ function rerenderCurrentDashboard() {
   } else {
     syncEligibilityThresholdControl();
     syncRiskAllocationControl();
-    syncLimitOrdersControl();
+    syncOrderModeControl();
     syncPortfolioParameterControls();
   }
   renderBotEvaluations();
@@ -8074,7 +8046,7 @@ function closeParameterModal() {
   setParameterModalStatus();
   refreshEligibilityThreshold();
   refreshRiskAllocation();
-  refreshLimitOrders();
+  refreshOrderMode();
   syncPortfolioParameterControls();
   if (openParameterModal.lastTrigger instanceof HTMLElement) {
     openParameterModal.lastTrigger.focus();
@@ -8292,7 +8264,12 @@ function parameterDraftFromControls(baseDraft = {}) {
     // untick would leave the stored true in place and the exclusion could never be cleared.
     draft.excludeOverUnderMarkets = draft.excludedMarketShapes.includes("over-under");
   }
-  if (els.limitOrders) draft.useLimitOrders = Boolean(els.limitOrders.checked);
+  if (els.orderMode) {
+    draft.orderMode = normalizeOrderMode(els.orderMode.value, Boolean(draft.useLimitOrders));
+    // Kept for an older workflow or saved state reader. The explicit orderMode above is
+    // authoritative, and Auto must not masquerade as a guaranteed resting limit order.
+    draft.useLimitOrders = draft.orderMode === "limit";
+  }
   return draft;
 }
 
@@ -8395,10 +8372,7 @@ async function confirmParameterModal() {
       state.riskAllocation = allocation;
       saveRiskAllocation(allocation);
     }
-    if (typeof draft.useLimitOrders === "boolean") {
-      state.limitOrders = draft.useLimitOrders;
-      saveLimitOrders(draft.useLimitOrders);
-    }
+    state.orderMode = normalizeOrderMode(draft.orderMode, Boolean(draft.useLimitOrders));
     await savePortfolioConfigNow();
     if (creating && creatingType === "live" && !state.portfolioConfig?.livePortfolios?.[creating]) {
       throw new Error("The live portfolio was not persisted by the server");
@@ -10126,7 +10100,8 @@ function liveWorkflowPayload(mode = state.mode) {
     ...config,
     min_probability: config.minProbability,
     stake_usdc: config.stakeUsdc,
-    use_limit_orders: config.useLimitOrders,
+    order_mode: currentOrderMode(),
+    use_limit_orders: currentOrderMode() === "limit",
     manual_run_once: true,
     live_run_source: "MANUAL",
     live_execution_candidate_token_ids: shortlistTokenIds.join(","),
@@ -11167,7 +11142,7 @@ function portfolioParameterRows(config = {}, { mode = null, portfolio = {}, live
       : (Object.keys(MARKET_SHAPE_LABELS).every((shape) => shapes.includes(shape))
         ? "all — cannot trade"
         : shapes.map(marketShapeLabel).join(", "))],
-    ["Order mode", config.useLimitOrders ? "limit" : "market"],
+    ["Order mode", orderModeLabel(normalizeOrderMode(config.orderMode, config.useLimitOrders))],
     // Automation and the per-market exclusion list are deliberately NOT rows. Asked for:
     // "odeber pouze z UI ale nech funkcni - automation, Cross-live risk, Order price,
     // Excluded markets (nevidim ho v nastaveni parametru - asi zbytecne tady, mame uz
@@ -11190,7 +11165,7 @@ function portfolioRuleRows(portfolio = {}) {
   // order add up for anyone reading both. Only when there is one: this is a live balance
   // rather than a setting, and zero of it says nothing.
   const resting = Number(selectedPaperPortfolio(state.botState || {})?.portfolio?.restingLimitOrderUsdc || 0);
-  if (config.useLimitOrders && resting > 0) rows.push(["Resting orders", money(resting)]);
+  if (normalizeOrderMode(config.orderMode, config.useLimitOrders) !== "market" && resting > 0) rows.push(["Resting orders", money(resting)]);
   return rows;
 }
 
@@ -12697,6 +12672,7 @@ const PORTFOLIO_CONFIG_HISTORY_LABELS = {
   minNetYield: "Minimum net profit",
   executionTrigger: "Execution trigger",
   executionCronMinutes: "Cron interval",
+  orderMode: "Order mode",
   useLimitOrders: "Order mode",
   autoRotatePositions: "Automatic rotation",
   stopLossRiskMultiplier: "Stop loss",
@@ -12883,7 +12859,7 @@ function renderBotState(botState) {
   els.botStatus.hidden = false;
   refreshEligibilityThreshold();
   refreshRiskAllocation();
-  refreshLimitOrders();
+  refreshOrderMode();
   const portfolioState = selectedPaperPortfolio(botState);
   const decision = portfolioState.lastDecision || botState.lastDecision || {};
   const portfolio = portfolioState.portfolio || botState.portfolio || {};
@@ -13789,7 +13765,7 @@ function renderLiveState(liveState) {
   if (els.showOpenOrders) els.showOpenOrders.checked = state.showOpenOrders;
   refreshEligibilityThreshold();
   refreshRiskAllocation();
-  refreshLimitOrders();
+  refreshOrderMode();
 
   const activePortfolioTab = activeTabTarget();
   const account = liveState.account || {};
@@ -15543,6 +15519,7 @@ function normalizeLiveExecutionRun(execution) {
       minVolume24hr: settings.minVolume24hr,
       minNetYield: settings.minNetYield,
       maxOrderFraction: account.maxOrderFraction,
+      orderMode: settings.orderMode,
       useLimitOrders: settings.useLimitOrders,
       crossPortfolioRiskDiversification: settings.crossPortfolioRiskDiversification,
     },
@@ -17709,8 +17686,7 @@ document.addEventListener("click", (event) => {
   state.eligibilityThresholdKey = "";
   state.riskAllocation = null;
   state.riskAllocationKey = "";
-  state.limitOrders = null;
-  state.limitOrdersKey = "";
+  state.orderMode = null;
   loadDashboardState();
 });
 
@@ -17996,11 +17972,12 @@ els.riskAllocation?.addEventListener("input", () => {
   rerenderCurrentDashboard();
 });
 
-els.limitOrders?.addEventListener("change", () => {
-  if (updateParameterDraft({ useLimitOrders: Boolean(els.limitOrders.checked) })) return;
-  state.limitOrders = Boolean(els.limitOrders.checked);
-  updatePortfolioConfigForMode(state.mode, { useLimitOrders: state.limitOrders });
-  saveLimitOrders(state.limitOrders);
+els.orderMode?.addEventListener("change", () => {
+  const orderMode = normalizeOrderMode(els.orderMode.value);
+  const patch = { orderMode, useLimitOrders: orderMode === "limit" };
+  if (updateParameterDraft(patch)) return;
+  state.orderMode = orderMode;
+  updatePortfolioConfigForMode(state.mode, patch);
   savePortfolioConfigSoon();
   rerenderCurrentDashboard();
 });

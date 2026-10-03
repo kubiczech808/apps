@@ -3732,7 +3732,7 @@ test("portfolio parameters: the order price still decides the bid, with no row f
   assert.ok(!labels.includes("Cross-live risk"));
 
   // 5050's tag filter stays: it is the only row that says which markets it looks at.
-  assert.match(live, /if \(isFixedEntryMode\(\)\) \{\n\s+rows\.push\(\["Tag filter",/);
+  assert.match(live, /if \(isFixedEntryMode\(\)\) \{\r?\n\s+rows\.push\(\["Tag filter",/);
 
   // The shared rows are all still there, so the live card is a superset rather than its
   // own list.
@@ -4742,7 +4742,7 @@ test("live entry: the band is checked against the submitted price, not the midpo
   assert.match(source, /const spreadWithinLimit = Number\.isFinite\(Number\(book\.spread\)\) && Number\(book\.spread\) <= MAX_SPREAD;/);
   assert.match(source, /const outOfBand = spreadWithinLimit\n\s+\? orderPriceBandRejection\(price, \{/,
     "a book wider than the limit must fall through to the spread rule, not answer as a band breach");
-  assert.ok(guard > source.indexOf("const price = orderPriceForBook(book, tick"),
+  assert.ok(guard > source.indexOf("const price = orderDecision.price"),
     "the check must come after the price is known");
   assert.ok(guard < source.indexOf("const orderSizing = sharesForOrder({"),
     "and before the order is sized, so a refused price never reaches the exchange");
@@ -4750,8 +4750,29 @@ test("live entry: the band is checked against the submitted price, not the midpo
   // Parity with the paper bot, which has always checked its band against the real entry:
   // a limit-order portfolio qualifies on the best bid it will rest at, not on the midpoint.
   // The two behaving differently on identical settings is the bug this closes.
-  assert.match(bot, /if \(strategy\.useLimitOrders\) \{\n\s+const limitEntry = numericOrNaN\(item\.bestBid\);/,
-    "the paper bot must still qualify a limit-order portfolio on its resting price");
+  assert.match(bot, /return paperOrderDecision\(item, strategy\)\.entryPrice;/,
+    "the paper bot must qualify every order mode on the price it will actually submit");
+});
+
+test("live entry: auto uses a market order only in a one-cent spread and otherwise rests at bid", () => {
+  const { orderDecisionForBook, AUTO_MARKET_MAX_SPREAD } = executor;
+  assert.equal(AUTO_MARKET_MAX_SPREAD, 0.01);
+
+  const tight = orderDecisionForBook({ bestBid: 0.7, bestAsk: 0.71, spread: 0.01 }, 0.01, { orderMode: "auto" });
+  assert.equal(tight.requestedMode, "auto");
+  assert.equal(tight.mode, "market");
+  assert.equal(tight.price, 0.71);
+  assert.ok(Math.abs(tight.spread - 0.01) < 0.000001);
+
+  const wide = orderDecisionForBook({ bestBid: 0.7, bestAsk: 0.72, spread: 0.02 }, 0.01, { orderMode: "auto" });
+  assert.equal(wide.requestedMode, "auto");
+  assert.equal(wide.mode, "limit");
+  assert.equal(wide.price, 0.7);
+  assert.ok(Math.abs(wide.spread - 0.02) < 0.000001);
+
+  const missingBid = orderDecisionForBook({ bestBid: null, bestAsk: 0.72, spread: null }, 0.01, { orderMode: "auto" });
+  assert.equal(missingBid.mode, null, "Auto must not silently cross an unmeasurable book");
+  assert.match(missingBid.rejection, /best bid and ask/);
 });
 
 // Reported: the run log showed the executor replacing a position while the portfolio had

@@ -42,6 +42,7 @@ const REAL_HELPERS = [
   "normalizeMarketTagList", "configExcludedMarketShapes", "normalizeEligibilityThreshold",
   "normalizeOptionalProbability", "configLiveEventMode", "formatHorizonHours",
   "normalizeRiskAllocation", "portfolioMarketTypeLabel", "normalizePortfolioMarketType",
+  "normalizeOrderMode", "orderModeLabel",
   "marketShapeLabel", "stopLossReverseIsEnabled", "automaticRotationIsEnabled",
   "normalizeExecutionTrigger", "executionCronMinutesLabel", "normalizeExecutionCronMinutes",
   "normalizeMinimumNetYield", "money", "percent", "probability", "dipEntryBound", "stopLossIsEnabled", "normalizeLiveEventMode", "normalizedScrapedScanTag", "normalizeStopLossRiskMultiplier",

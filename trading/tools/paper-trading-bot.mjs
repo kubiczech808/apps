@@ -30,6 +30,21 @@ function envBool(name, fallback = false) {
   return String(value).toLowerCase() === "true";
 }
 
+// Prices in the CLOB are USDC per share, so one cent is one percentage point. Auto only
+// crosses a book this tight; on a wider book it leaves a maker bid and accepts that it may
+// not fill. A missing side is not a tight spread and never becomes an invented market fill.
+const AUTO_MARKET_MAX_SPREAD = 0.01;
+
+function normalizeOrderMode(value, legacyUseLimitOrders = false) {
+  const mode = String(value || "").trim().toLowerCase();
+  if (["market", "limit", "auto"].includes(mode)) return mode;
+  return legacyUseLimitOrders ? "limit" : "market";
+}
+
+function envOrderMode(prefix, legacyFallback = false) {
+  return normalizeOrderMode(process.env[`${prefix}_ORDER_MODE`], envBool(`${prefix}_USE_LIMIT_ORDERS`, legacyFallback));
+}
+
 function normalizeStopLossRiskMultiplier(value, fallback = 0) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return fallback;
@@ -1050,6 +1065,7 @@ const PAPER_STRATEGIES = {
     reverseOnStopLoss: envBool("PAPER_CONSERVATIVE_REVERSE_ON_STOP_LOSS", false),
     // A resting limit buy at the current best bid instead of a market buy at the
     // ask. Default off, unchanged behavior absent a saved value.
+    orderMode: envOrderMode("PAPER_CONSERVATIVE", false),
     useLimitOrders: envBool("PAPER_CONSERVATIVE_USE_LIMIT_ORDERS", false),
     marketType: envPortfolioMarketType("PAPER_CONSERVATIVE_MARKET_TYPE", "PAPER_CONSERVATIVE_REQUIRE_MOST_PROBABLE", "all"),
     excludeOverUnderMarkets: envBool("PAPER_CONSERVATIVE_EXCLUDE_OVER_UNDER_MARKETS", false),
@@ -1089,6 +1105,7 @@ const PAPER_STRATEGIES = {
     equalRiskMultiplier: envStopLossRiskMultiplier("PAPER_HIGH_REWARD", 0),
     equalRiskProtection: envStopLossRiskMultiplier("PAPER_HIGH_REWARD", 0) > 0,
     reverseOnStopLoss: envBool("PAPER_HIGH_REWARD_REVERSE_ON_STOP_LOSS", false),
+    orderMode: envOrderMode("PAPER_HIGH_REWARD", false),
     useLimitOrders: envBool("PAPER_HIGH_REWARD_USE_LIMIT_ORDERS", false),
     marketType: envPortfolioMarketType("PAPER_HIGH_REWARD_MARKET_TYPE", "PAPER_HIGH_REWARD_REQUIRE_MOST_PROBABLE", "all"),
     excludeOverUnderMarkets: envBool("PAPER_HIGH_REWARD_EXCLUDE_OVER_UNDER_MARKETS", false),
@@ -1128,6 +1145,7 @@ const PAPER_STRATEGIES = {
     equalRiskMultiplier: envStopLossRiskMultiplier("PAPER_MORE_PROBABLE", 0),
     equalRiskProtection: envStopLossRiskMultiplier("PAPER_MORE_PROBABLE", 0) > 0,
     reverseOnStopLoss: envBool("PAPER_MORE_PROBABLE_REVERSE_ON_STOP_LOSS", false),
+    orderMode: envOrderMode("PAPER_MORE_PROBABLE", false),
     useLimitOrders: envBool("PAPER_MORE_PROBABLE_USE_LIMIT_ORDERS", false),
     marketType: envPortfolioMarketType("PAPER_MORE_PROBABLE_MARKET_TYPE", "PAPER_MORE_PROBABLE_REQUIRE_MOST_PROBABLE", "multi"),
     excludeOverUnderMarkets: envBool("PAPER_MORE_PROBABLE_EXCLUDE_OVER_UNDER_MARKETS", false),
@@ -1171,6 +1189,7 @@ const PAPER_STRATEGIES = {
     equalRiskMultiplier: envStopLossRiskMultiplier("PAPER_EQUAL", 1.5),
     equalRiskProtection: envStopLossRiskMultiplier("PAPER_EQUAL", 1.5) > 0,
     reverseOnStopLoss: envBool("PAPER_EQUAL_REVERSE_ON_STOP_LOSS", false),
+    orderMode: envOrderMode("PAPER_EQUAL", false),
     useLimitOrders: envBool("PAPER_EQUAL_USE_LIMIT_ORDERS", false),
     marketType: envPortfolioMarketType("PAPER_EQUAL_MARKET_TYPE", "PAPER_EQUAL_REQUIRE_MOST_PROBABLE", "all"),
     excludeOverUnderMarkets: envBool("PAPER_EQUAL_EXCLUDE_OVER_UNDER_MARKETS", false),
@@ -1255,6 +1274,7 @@ function customPaperStrategies(raw = process.env.PAPER_CUSTOM_PORTFOLIOS) {
       dipEntryOpenMax: normalizeOptionalProbability(row.dipEntryOpenMax) ?? 0.8,
       equalRiskProtection: rowStopLossRiskMultiplier(row, 0) > 0,
       reverseOnStopLoss: row.reverseOnStopLoss === true,
+      orderMode: normalizeOrderMode(row.orderMode, row.useLimitOrders === true),
       useLimitOrders: row.useLimitOrders === true,
       archived: row.archived === true,
       marketType,
@@ -2378,7 +2398,8 @@ function normalizePaperPortfolio(strategy, input = {}) {
     // is sized depends on it: a resting limit order holds capital without being exposure,
     // so it does not block the order after it. updatePaperPortfolio reads this to publish
     // both the allocated and the deployable figure.
-    useLimitOrders: Boolean(strategy.useLimitOrders),
+    orderMode: normalizeOrderMode(strategy.orderMode, Boolean(strategy.useLimitOrders)),
+    useLimitOrders: normalizeOrderMode(strategy.orderMode, Boolean(strategy.useLimitOrders)) === "limit",
     description: strategy.description,
     resetAt: input.resetAt || null,
     resetArchiveId: input.resetArchiveId || null,
@@ -8000,7 +8021,13 @@ function positionRisk(trades) {
 // offers nobody took. Both figures are published, so the position is never hidden.
 function deployableCapital(portfolioState, strategy, sizingCapital) {
   const committed = openRisk(portfolioState.trades || []);
-  const resting = strategy?.useLimitOrders ? waitingLimitOrderRisk(portfolioState.trades || []) : 0;
+  // Kept inline because this compact capital calculation is also exercised on its own by
+  // the offline regression harness. Auto can create a resting order just like Limit;
+  // market is the only mode whose outstanding bids cannot exist.
+  const configuredMode = String(strategy?.orderMode || "").trim().toLowerCase();
+  const canRest = configuredMode === "auto" || configuredMode === "limit"
+    || (!configuredMode && strategy?.useLimitOrders === true);
+  const resting = canRest ? waitingLimitOrderRisk(portfolioState.trades || []) : 0;
   return Math.max(0, sizingCapital - committed + resting);
 }
 
@@ -8589,36 +8616,63 @@ function numericOrNull(value) {
   return Number.isFinite(numeric) ? Number(numeric.toFixed(4)) : null;
 }
 
+// Decide from the same fresh book that supplies the entry price. This is shared by
+// qualification, paper economics and simulated order creation, so Auto cannot display a
+// market candidate yet silently create a resting limit order (or the reverse).
+function paperOrderDecision(item = {}, strategy = {}) {
+  const requestedMode = normalizeOrderMode(strategy.orderMode, strategy.useLimitOrders === true);
+  const bestBid = numericOrNaN(item.bestBid);
+  const bestAsk = numericOrNaN(item.bestAsk);
+  const usableBid = Number.isFinite(bestBid) && bestBid > 0 && bestBid < 1;
+  const usableAsk = Number.isFinite(bestAsk) && bestAsk > 0 && bestAsk < 1;
+  if (requestedMode === "auto") {
+    if (!usableBid || !usableAsk || bestAsk < bestBid) {
+      return { requestedMode, mode: null, entryPrice: NaN, reason: "Auto order mode needs a current best bid and ask" };
+    }
+    const spread = bestAsk - bestBid;
+    if (spread <= AUTO_MARKET_MAX_SPREAD + 0.0000001) {
+      return { requestedMode, mode: "market", entryPrice: bestAsk, spread };
+    }
+    return { requestedMode, mode: "limit", entryPrice: bestBid, spread };
+  }
+  if (requestedMode === "limit" && usableBid) {
+    return { requestedMode, mode: "limit", entryPrice: bestBid, spread: usableAsk ? bestAsk - bestBid : null };
+  }
+  // Preserve the established manual-limit fallback for a book without a bid. Auto never
+  // takes this branch: its purpose is precisely to avoid trading a book it cannot measure.
+  const marketPrice = numericOrNaN(item.marketPrice);
+  return {
+    requestedMode,
+    mode: "market",
+    entryPrice: usableAsk ? bestAsk : marketPrice,
+    spread: usableAsk && usableBid ? bestAsk - bestBid : null,
+  };
+}
+
+function strategyCanPlaceLimitOrders(strategy = {}) {
+  return normalizeOrderMode(strategy.orderMode, strategy.useLimitOrders === true) !== "market";
+}
+
 // Gamma's outcome price is a useful reference quote, but it can be stale by the
 // time an order is placed. A Polymarket-threshold portfolio must be judged by
 // the executable CLOB price that is also used as the order entry, otherwise a
 // 59% order can incorrectly pass a 75% threshold from an older 81% quote.
-//
-// A maker order is different again: its actual entry is the best bid. Comparing
-// the threshold to the offer/market quote while creating the order at a much
-// lower bid made a 29% limit order pass a 70% portfolio. Missing bid data is not
-// an acceptable substitute for the older market quote in this mode: it means we
-// cannot prove the probability of the order we are about to place.
 function portfolioProbabilityForStrategy(item = {}, strategy = {}) {
   if (strategy.probabilitySource === "polymarket") {
-    if (strategy.useLimitOrders) {
-      const limitEntry = numericOrNaN(item.bestBid);
-      return Number.isFinite(limitEntry) && limitEntry > 0 && limitEntry < 1 ? limitEntry : NaN;
-    }
-    return numericOrNaN(item.marketPrice);
+    return paperOrderDecision(item, strategy).entryPrice;
   }
   return numericOrNaN(item.aiProbability);
 }
 
 function paperEntryEconomics(item = {}, strategy = null) {
   const stake = Number(item.stakeUsdc ?? item.filledStakeUsdc);
-  const limitPrice = Number(item.bestBid);
-  if (strategy?.useLimitOrders && Number.isFinite(stake) && stake > 0
-    && Number.isFinite(limitPrice) && limitPrice > 0 && limitPrice < 1) {
-    const shares = stake / limitPrice;
+  const order = paperOrderDecision(item, strategy || {});
+  if (order.mode === "limit" && Number.isFinite(stake) && stake > 0
+    && Number.isFinite(order.entryPrice) && order.entryPrice > 0 && order.entryPrice < 1) {
+    const shares = stake / order.entryPrice;
     return {
       executionMode: "LIMIT_BUY",
-      entryPrice: limitPrice,
+      entryPrice: order.entryPrice,
       shares,
       entryFeeUsdc: 0,
       totalCostUsdc: stake,
@@ -8626,19 +8680,28 @@ function paperEntryEconomics(item = {}, strategy = null) {
     };
   }
 
+  const marketEntryPrice = Number.isFinite(order.entryPrice) ? order.entryPrice : Number(item.marketPrice);
+  const marketShares = Number.isFinite(stake) && stake > 0 && Number.isFinite(marketEntryPrice) && marketEntryPrice > 0
+    ? stake / marketEntryPrice
+    : Number(item.executableShares ?? item.shares);
+  const feeRate = Number(item.feeRate || 0);
+  const marketFee = Number.isFinite(stake) && stake > 0 && Number.isFinite(marketShares)
+    ? takerFeeForFills([{ price: marketEntryPrice, size: marketShares }], feeRate)
+    : Number(item.takerFeeUsdc || 0);
+  const marketCost = Number.isFinite(stake) && stake > 0 ? stake + marketFee : Number(item.totalCostUsdc ?? item.stakeUsdc);
   return {
     executionMode: item.executionMode || "MARKET_BUY",
-    entryPrice: Number(item.marketPrice),
-    shares: Number(item.executableShares ?? item.shares),
-    entryFeeUsdc: Number(item.takerFeeUsdc || 0),
-    totalCostUsdc: Number(item.totalCostUsdc ?? item.stakeUsdc),
-    netGainIfWinUsdc: Number(item.netGainIfWinUsdc),
+    entryPrice: marketEntryPrice,
+    shares: marketShares,
+    entryFeeUsdc: marketFee,
+    totalCostUsdc: marketCost,
+    netGainIfWinUsdc: marketShares - marketCost,
   };
 }
 
 function netYieldAfterFees(item = {}, strategy = null) {
   const entry = paperEntryEconomics(item, strategy);
-  if (strategy?.useLimitOrders && entry.executionMode === "LIMIT_BUY") {
+  if (entry.executionMode === "LIMIT_BUY") {
     return entry.totalCostUsdc > 0 ? entry.netGainIfWinUsdc / entry.totalCostUsdc : null;
   }
   const stored = Number(item.netYield);
@@ -8684,6 +8747,7 @@ function portfolioFilterResult(item, strategy) {
   const minNetYield = Math.max(0, Number(strategy.minNetYield) || 0);
   const probabilitySource = strategy.probabilitySource === "polymarket" ? "polymarket" : "ai";
   const selectedProbability = portfolioProbabilityForStrategy(item, strategy);
+  const orderDecision = paperOrderDecision(item, strategy);
   const liquidity = Number(item.liquidity || 0);
   // The portfolio threshold is a traded-volume floor, which is what Polymarket shows.
   const candidateVolume = rowVolumeUsdc(item);
@@ -8723,6 +8787,9 @@ function portfolioFilterResult(item, strategy) {
   // Polymarket- and AI-probability portfolios.
   if (selectionStatus === "REVALIDATION_FAILED" || item.executionQuoteVerified === false) {
     reasons.push("current CLOB quote is unavailable after revalidation");
+  }
+  if (!orderDecision.mode || !Number.isFinite(orderDecision.entryPrice)) {
+    reasons.push(orderDecision.reason || "no current executable order price");
   }
   if (probabilitySource === "ai" && REQUIRE_GEMINI && !hasGroundedPublicMemo(item)) reasons.push("grounded Gemini analysis is pending");
   if (Number.isFinite(minProbability) && (!Number.isFinite(selectedProbability) || selectedProbability < minProbability)) {
@@ -9168,7 +9235,40 @@ export function sortEligibleForStrategy(eligible, strategy = PAPER_STRATEGIES.co
   });
 }
 
-function scaledPaperEconomics(best, stake) {
+function scaledPaperEconomics(best, stake, strategy = {}) {
+  const order = paperOrderDecision(best, strategy);
+  if (order.mode === "limit" && Number.isFinite(order.entryPrice) && order.entryPrice > 0 && order.entryPrice < 1) {
+    const shares = stake / order.entryPrice;
+    return {
+      scale: 1,
+      shares: Number(shares.toFixed(4)),
+      takerFeeUsdc: 0,
+      totalCostUsdc: Number(stake.toFixed(5)),
+      grossGainIfWinUsdc: Number((shares - stake).toFixed(4)),
+      netGainIfWinUsdc: Number((shares - stake).toFixed(4)),
+      maxLossUsdc: Number(stake.toFixed(5)),
+      expectedValueUsdc: null,
+      marketFills: [],
+    };
+  }
+  const marketPrice = Number.isFinite(order.entryPrice) ? order.entryPrice : Number(best.marketPrice);
+  if (Number.isFinite(marketPrice) && marketPrice > 0 && marketPrice < 1) {
+    const shares = stake / marketPrice;
+    const feeRate = Number(best.feeRate || 0);
+    const fee = takerFeeForFills([{ price: marketPrice, size: shares }], feeRate);
+    const totalCost = stake + fee;
+    return {
+      scale: 1,
+      shares: Number(shares.toFixed(4)),
+      takerFeeUsdc: Number(fee.toFixed(5)),
+      totalCostUsdc: Number(totalCost.toFixed(5)),
+      grossGainIfWinUsdc: Number((shares - stake).toFixed(4)),
+      netGainIfWinUsdc: Number((shares - totalCost).toFixed(4)),
+      maxLossUsdc: Number(totalCost.toFixed(5)),
+      expectedValueUsdc: null,
+      marketFills: [],
+    };
+  }
   const baseStake = Number(best.stakeUsdc || best.filledStakeUsdc || 0);
   const targetStake = Number(stake);
   const scale = baseStake > 0 && Number.isFinite(targetStake) ? targetStake / baseStake : 1;
@@ -9199,7 +9299,10 @@ function scaledPaperEconomics(best, stake) {
 }
 
 function paperTradeFromCandidate(best, strategy, today, stake) {
-  const economics = scaledPaperEconomics(best, stake);
+  const order = paperOrderDecision(best, strategy);
+  const entryPrice = Number.isFinite(order.entryPrice) ? order.entryPrice : best.marketPrice;
+  const entryCandidate = entryPrice === best.marketPrice ? best : { ...best, marketPrice: entryPrice };
+  const economics = scaledPaperEconomics(entryCandidate, stake, strategy);
   // This is the traded volume visible at order creation, not a later mark. Closed
   // trades keep it as an entry fact so their results can be compared against the
   // liquidity available when the decision was actually made.
@@ -9208,13 +9311,13 @@ function paperTradeFromCandidate(best, strategy, today, stake) {
   const equalRiskPlan = strategy.equalRiskProtection
     ? equalRiskStopPlan({
       ...economics,
-      entryPrice: best.marketPrice,
+      entryPrice,
       feeRate: best.feeRate,
       feesEnabled: best.feesEnabled,
       riskMultiplier: strategy.equalRiskMultiplier ?? 1,
     })
     : null;
-  const selectionEconomics = portfolioEconomics(best, strategy);
+  const selectionEconomics = portfolioEconomics(entryCandidate, strategy);
   const selectedExpectedValue = Number.isFinite(selectionEconomics.expectedValueUsdc)
     ? Number((selectionEconomics.expectedValueUsdc * economics.scale).toFixed(4))
     : null;
@@ -9247,7 +9350,7 @@ function paperTradeFromCandidate(best, strategy, today, stake) {
       thesisType: best.thesisType,
       aiProbability: best.aiProbability,
       rawProbability: best.rawProbability,
-      marketPrice: best.marketPrice,
+      marketPrice: entryPrice,
       marketProbability: best.marketProbability,
       entryVolumeUsdc: Number.isFinite(entryVolumeUsdc) ? Number(entryVolumeUsdc.toFixed(2)) : null,
       edge: best.edge,
@@ -9289,8 +9392,10 @@ function paperTradeFromCandidate(best, strategy, today, stake) {
     riskPrimaryEntity: best.riskPrimaryEntity,
     riskGroupKeys: best.riskGroupKeys,
     riskGroupLabels: best.riskGroupLabels,
-    executionMode: best.executionMode,
-    entryPrice: best.marketPrice,
+    executionMode: order.mode === "market" ? "MARKET_BUY" : best.executionMode,
+    requestedOrderMode: order.requestedMode,
+    orderMode: order.mode || order.requestedMode,
+    entryPrice,
     bestAsk: best.bestAsk,
     bestBid: best.bestBid,
     spread: best.spread,
@@ -9334,7 +9439,7 @@ function paperTradeFromCandidate(best, strategy, today, stake) {
     grossGainIfWinUsdc: economics.grossGainIfWinUsdc,
     netGainIfWinUsdc: economics.netGainIfWinUsdc,
     maxLossUsdc: economics.maxLossUsdc,
-    currentPrice: best.marketPrice,
+    currentPrice: entryPrice,
     currentValueUsdc: strategy.equalRiskProtection ? economics.totalCostUsdc : Number(stake.toFixed(2)),
     unrealizedPnlUsdc: 0,
     unrealizedPnlPct: 0,
@@ -9364,8 +9469,9 @@ function paperTradeFromCandidate(best, strategy, today, stake) {
 // lifecycle state of an order that has not filled yet.
 function openPaperTradeForStrategy(best, strategy, today, stake) {
   const trade = paperTradeFromCandidate(best, strategy, today, stake);
-  if (!strategy.useLimitOrders) return trade;
-  const limitPrice = Number(best.bestBid);
+  const order = paperOrderDecision(best, strategy);
+  if (order.mode !== "limit") return trade;
+  const limitPrice = order.entryPrice;
   if (!Number.isFinite(limitPrice) || limitPrice <= 0 || limitPrice >= 1) return trade;
   const shares = Number((stake / limitPrice).toFixed(4));
   // A limit order that rests at the bid is a maker fill. Polymarket charges the
@@ -9388,6 +9494,8 @@ function openPaperTradeForStrategy(best, strategy, today, stake) {
     ...trade,
     status: "LIMIT_ORDER_WAITING",
     executionMode: "LIMIT_BUY",
+    requestedOrderMode: order.requestedMode,
+    orderMode: order.mode,
     entryPrice: limitPrice,
     bestAsk: best.bestAsk,
     bestBid: best.bestBid,
@@ -9406,7 +9514,7 @@ function openPaperTradeForStrategy(best, strategy, today, stake) {
     stopLossStatus: equalRiskPlan?.requiresStop ? "ARMED" : (strategy.equalRiskProtection ? "NOT_REQUIRED" : null),
     stopLossMinimumExitUsdc: equalRiskPlan?.minimumExitValueUsdc ?? null,
     marketFills: [{ price: limitPrice, size: shares, costUsdc: Number(stake.toFixed(2)) }],
-    statusNote: `Resting limit buy placed at ${limitPrice.toFixed(4)} (the best bid at selection); waiting for the market to fill it.`,
+    statusNote: `Resting limit buy placed at ${limitPrice.toFixed(4)} (the best bid at selection); waiting for the market to fill it.${order.requestedMode === "auto" ? " Auto selected limit because the spread exceeded $0.01." : ""}`,
   };
 }
 
@@ -10064,7 +10172,7 @@ function maybeOpenScheduledTrade(portfolioState, eligible, strategy = PAPER_STRA
   const capitalAdjustment = Number(portfolioState.capitalAdjustmentUsdc) || 0;
   const sizingCapital = Math.max(0, PORTFOLIO_USDC + capitalAdjustment + realizedPnl);
   // Resting limit orders do not block the next one; see deployableCapital.
-  const restingCapital = strategy.useLimitOrders ? waitingLimitOrderRisk(portfolioState.trades) : 0;
+  const restingCapital = strategyCanPlaceLimitOrders(strategy) ? waitingLimitOrderRisk(portfolioState.trades) : 0;
   const available = deployableCapital(portfolioState, strategy, sizingCapital);
   const maxFraction = Number(strategy.maxFraction ?? portfolioState.portfolio?.maxFraction ?? MAX_FRACTION);
   const configuredStake = Number(strategy.stakeUsdc ?? portfolioState.stakeUsdc ?? portfolioState.portfolio?.stakeUsdc);
@@ -13669,7 +13777,7 @@ function updatePaperPortfolio(portfolioState) {
   // dashboard and the run log contradict each other: "1.32 USDC available" beside an order
   // that was placed anyway.
   const restingLimitOrderCapital = waitingLimitOrderRisk(portfolioState.trades);
-  const deployable = portfolioState.useLimitOrders
+  const deployable = strategyCanPlaceLimitOrders(portfolioState)
     ? freeCapital + restingLimitOrderCapital
     : freeCapital;
   portfolioState.portfolio = {
@@ -14642,6 +14750,9 @@ export {
   feeConfig,
   netYieldAfterFees,
   paperEntryEconomics,
+  paperOrderDecision,
+  strategyCanPlaceLimitOrders,
+  AUTO_MARKET_MAX_SPREAD,
   lastRunAtForStrategy,
   strategyCadenceIsDue,
   strategyEligibleCandidates,

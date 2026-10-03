@@ -4092,6 +4092,7 @@ function default_portfolio_config(): array
                 'executionTrigger' => 'cron',
                 // Paper portfolios default to immediate simulated fills. Unlike live,
                 // their order mode is configurable and must be retained on save.
+                'orderMode' => 'market',
                 'useLimitOrders' => false,
                 'marketType' => 'all',
                 'excludeOverUnderMarkets' => false,
@@ -4119,6 +4120,7 @@ function default_portfolio_config(): array
                 'minLiquidityUsdc' => null,
                 'minNetYield' => 0.0,
                 'executionTrigger' => 'cron',
+                'orderMode' => 'market',
                 'useLimitOrders' => false,
                 'marketType' => 'all',
                 'excludeOverUnderMarkets' => false,
@@ -4144,6 +4146,7 @@ function default_portfolio_config(): array
                 'minLiquidityUsdc' => 500000,
                 'minNetYield' => 0.0,
                 'executionTrigger' => 'cron',
+                'orderMode' => 'market',
                 'useLimitOrders' => false,
                 'marketType' => 'multi',
                 'excludeOverUnderMarkets' => false,
@@ -4174,6 +4177,7 @@ function default_portfolio_config(): array
                 // Equal defaults to a check after a completed market scan. Users may
                 // choose a scheduled cadence when they prefer a defined interval.
                 'executionTrigger' => 'after_scrape',
+                'orderMode' => 'market',
                 'useLimitOrders' => false,
                 'marketType' => 'all',
                 'excludeOverUnderMarkets' => false,
@@ -4205,6 +4209,7 @@ function default_portfolio_config(): array
             'minLiquidityUsdc' => 100,
             'minNetYield' => 0.0,
             'executionTrigger' => 'cron',
+            'orderMode' => 'limit',
             'useLimitOrders' => true,
             'marketType' => 'all',
             'excludeOverUnderMarkets' => false,
@@ -4239,6 +4244,7 @@ function default_portfolio_config(): array
             'minLiquidityUsdc' => 100,
             'minNetYield' => 0.0,
             'executionTrigger' => 'cron',
+            'orderMode' => 'limit',
             'useLimitOrders' => true,
             'marketType' => 'all',
             'excludeOverUnderMarkets' => false,
@@ -4284,7 +4290,7 @@ function portfolio_config_history_fields(): array
         'settlementCloseBid',
         'selectionOrder', 'marketType', 'excludedMarketShapes', 'probabilitySource',
         'minLiquidityUsdc', 'minNetYield', 'executionTrigger', 'executionCronMinutes',
-        'useLimitOrders', 'autoRotatePositions', 'stopLossRiskMultiplier', 'reverseOnStopLoss',
+        'useLimitOrders', 'orderMode', 'autoRotatePositions', 'stopLossRiskMultiplier', 'reverseOnStopLoss',
         'includeOnlyMarketTags', 'excludedMarketTags', 'automationEnabled', 'archived',
         'dipEntryEnabled', 'dipEntryOpenMin', 'dipEntryOpenMax',
     ];
@@ -4787,6 +4793,18 @@ function normalize_selection_order_value(mixed $value): string
     return $value === 'highest_reward_risk_first' ? 'highest_reward_risk_first' : 'highest_ev_pa_first';
 }
 
+// `useLimitOrders` was the original two-state setting. Keep accepting it so saved
+// portfolios and older clients retain their behavior, but persist the explicit mode for
+// the executor. Auto chooses from the fresh CLOB bid/ask at order time.
+function normalize_order_mode_value(mixed $value, bool $legacyUseLimitOrders = false): string
+{
+    $mode = strtolower(trim((string) $value));
+    if (in_array($mode, ['market', 'limit', 'auto'], true)) {
+        return $mode;
+    }
+    return $legacyUseLimitOrders ? 'limit' : 'market';
+}
+
 function normalize_portfolio_market_type_value(mixed $value, bool $legacyMultichoice = false): string
 {
     $normalized = strtolower(trim((string) ($value ?? '')));
@@ -4993,6 +5011,21 @@ function normalize_strategy_config(array $input, array $defaults): array
         $input['excludedMarketShapes'] ?? $defaults['excludedMarketShapes'] ?? [],
         ($input['excludeOverUnderMarkets'] ?? false) === true,
     );
+    // Prefer the explicit three-state setting. An older client can still submit only
+    // its checkbox, in which case that checkbox deliberately wins over a saved Auto mode.
+    if (array_key_exists('orderMode', $input)) {
+        $orderMode = normalize_order_mode_value(
+            $input['orderMode'],
+            (bool) ($input['useLimitOrders'] ?? $defaults['useLimitOrders'] ?? false)
+        );
+    } elseif (array_key_exists('useLimitOrders', $input)) {
+        $orderMode = normalize_order_mode_value(null, (bool) $input['useLimitOrders']);
+    } else {
+        $orderMode = normalize_order_mode_value(
+            $defaults['orderMode'] ?? null,
+            (bool) ($defaults['useLimitOrders'] ?? false)
+        );
+    }
     return [
         'displayName' => normalize_portfolio_display_name(
             $input['displayName'] ?? $defaults['displayName'],
@@ -5033,10 +5066,10 @@ function normalize_strategy_config(array $input, array $defaults): array
         // Missing means the portfolio keeps its established behavior. Equal is the
         // only default-off portfolio; all other existing portfolios keep rotation on.
         'autoRotatePositions' => (bool) ($input['autoRotatePositions'] ?? $defaults['autoRotatePositions'] ?? true),
-        // This applies to every portfolio type. Previously it was normalized only for
-        // the primary live portfolio, so a paper setting silently disappeared after
-        // saving and the bot fell back to market orders.
-        'useLimitOrders' => (bool) ($input['useLimitOrders'] ?? $defaults['useLimitOrders'] ?? false),
+        // `orderMode` is the source of truth. The boolean remains derived for older
+        // workers and readers; Auto is intentionally not represented as a limit order.
+        'orderMode' => $orderMode,
+        'useLimitOrders' => $orderMode === 'limit',
         'marketType' => $marketType,
         // Which market SHAPES this portfolio refuses -- over-under, spread, exact-score,
         // draw, in-event-leg, both-teams, outright. A shape is how the price MOVES: whether
@@ -5213,6 +5246,7 @@ function normalize_portfolio_config(array $input): array
     // rejected by the exchange one bid at a time.
     $fixedInput = is_array($input['live5050'] ?? null) ? $input['live5050'] : [];
     $config['live5050'] = normalize_strategy_config($fixedInput, $defaults['live5050']);
+    $config['live5050']['orderMode'] = 'limit';
     $config['live5050']['useLimitOrders'] = true;
     // Unlike the plain live portfolio above, 5050 may be archived: it hides the tab and
     // stops resting new bids, but withdrawing an expired resting order and refreshing
