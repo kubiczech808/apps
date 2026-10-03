@@ -18,7 +18,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: trading-observation-compact-migration-${{ github.ref }}
+  # The resolver can change a row's lifecycle and the archiver can delete a resolved row.
+  # Keep those maintenance writes out of the copy/verify/swap window; frequent market scans
+  # remain safe because their upserts are dual-written to the compact shadow.
+  group: trading-observation-resolution-maintenance-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:

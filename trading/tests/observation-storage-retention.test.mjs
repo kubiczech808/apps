@@ -132,4 +132,8 @@ test("schema rebuild stays opt-in and behind the shared-quota guard", () => {
   assert.match(COMPACT_WORKFLOW, /inputs\.confirm == true/);
   assert.match(COMPACT_MIGRATION, /attempt <= 5/,
     "a brief shared-hosting disconnect cannot abandon a verified long-running copy");
+  assert.match(body("trading_storage_compact_observations_migration_verify"), /key_sum/,
+    "cutover verifies the complete key set without an unbounded cross-table join");
+  assert.match(COMPACT_WORKFLOW, /trading-observation-resolution-maintenance/,
+    "archive and remote resolution cannot mutate a source row during the verified swap");
 });

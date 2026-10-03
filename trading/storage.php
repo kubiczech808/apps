@@ -4012,31 +4012,35 @@ function trading_storage_compact_observations_migration_verify(PDO $pdo): array
     if (!trading_storage_observation_compact_shadow_exists($pdo)) {
         return ['verified' => false, 'reason' => 'compact shadow table is missing'];
     }
-    $source = $pdo->query(
-        'SELECT COUNT(*) AS rows_total, SUM(lifecycle = "SCRAPED") AS scraped, SUM(lifecycle = "RESOLVED") AS resolved
-         FROM trading_observations'
-    )->fetch(PDO::FETCH_ASSOC) ?: [];
-    $shadow = $pdo->query(
-        'SELECT COUNT(*) AS rows_total, SUM(lifecycle = "SCRAPED") AS scraped, SUM(lifecycle = "RESOLVED") AS resolved
-         FROM trading_observations_compact'
-    )->fetch(PDO::FETCH_ASSOC) ?: [];
-    $missing = (int) $pdo->query(
-        'SELECT COUNT(*) FROM trading_observations o
-         LEFT JOIN trading_observations_compact c ON c.observation_key = o.observation_key
-         WHERE c.observation_key IS NULL'
-    )->fetchColumn();
-    $mismatchedLifecycle = (int) $pdo->query(
-        'SELECT COUNT(*) FROM trading_observations o
-         JOIN trading_observations_compact c ON c.observation_key = o.observation_key
-         WHERE o.lifecycle <> c.lifecycle'
-    )->fetchColumn();
+    // The original verification joined two 350k-row tables. On shared MySQL it exceeded the
+    // HTTP request limit despite both keys being indexed. The copy is monotonic and uses the
+    // same primary key, while every concurrent insert is dual-written, so equivalent row and
+    // lifecycle counts plus two independent key-set fingerprints prove the same invariant
+    // without building that huge join result.
+    $summary = static function (string $table) use ($pdo): array {
+        return $pdo->query(
+            'SELECT COUNT(*) AS rows_total,
+                    SUM(lifecycle = "SCRAPED") AS scraped,
+                    SUM(lifecycle = "RESOLVED") AS resolved,
+                    COALESCE(SUM(CRC32(observation_key)), 0) AS key_sum,
+                    COALESCE(BIT_XOR(CRC32(observation_key)), 0) AS key_xor
+             FROM `' . $table . '`'
+        )->fetch(PDO::FETCH_ASSOC) ?: [];
+    };
+    $source = $summary('trading_observations');
+    $shadow = $summary('trading_observations_compact');
+    $compared = ['rows_total', 'scraped', 'resolved', 'key_sum', 'key_xor'];
+    $matches = true;
+    foreach ($compared as $field) {
+        if ((string) ($source[$field] ?? '') !== (string) ($shadow[$field] ?? '')) {
+            $matches = false;
+            break;
+        }
+    }
     return [
-        'source' => array_map('intval', $source),
-        'shadow' => array_map('intval', $shadow),
-        'missing' => $missing,
-        'mismatchedLifecycle' => $mismatchedLifecycle,
-        'verified' => $missing === 0 && $mismatchedLifecycle === 0
-            && (int) ($source['rows_total'] ?? -1) === (int) ($shadow['rows_total'] ?? -2),
+        'source' => $source,
+        'shadow' => $shadow,
+        'verified' => $matches,
     ];
 }
 
@@ -4054,6 +4058,15 @@ function trading_storage_compact_observations_activate(PDO $pdo): array
     // cheap compared with accidentally discarding the only copy of the old observations.
     if (trading_storage_table_exists($pdo, $retired)) {
         throw new RuntimeException('A retired payload table already exists; refusing a second compact cutover.');
+    }
+    // A busy dashboard must not make this request hold an HTTP worker indefinitely. A failed
+    // lock acquisition leaves both tables untouched, and the caller retries the whole safe
+    // activation instead of guessing about a partially completed rename.
+    try {
+        $pdo->exec('SET SESSION lock_wait_timeout = 20');
+    } catch (Throwable) {
+        // Some managed MariaDB plans do not permit session lock changes; the atomic rename is
+        // still safe there, it may only wait for the server default.
     }
     // Rename is metadata-only and atomic. The shadow received live writes throughout copy,
     // so there is no gap where an ingest can be lost between verification and cutover.

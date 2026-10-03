@@ -9008,6 +9008,8 @@ try {
             ]);
         }
         if ($operation === 'compact-observations-verify') {
+            @set_time_limit(0);
+            @ignore_user_abort(true);
             respond([
                 'ok' => true,
                 'operation' => 'compact-observations-verify',

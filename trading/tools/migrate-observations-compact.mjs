@@ -14,7 +14,10 @@ async function call(operation, input = {}) {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Trading-Trigger-Key": key },
         body: JSON.stringify({ operation, ...input }),
-        signal: AbortSignal.timeout(120_000),
+        signal: AbortSignal.timeout(
+          operation === "compact-observations-verify" || operation === "compact-observations-activate"
+            ? 600_000 : 120_000,
+        ),
       });
       const text = await response.text();
       let json = null;
@@ -39,17 +42,23 @@ if (prepared.result?.alreadyCompact) process.exit(0);
 let after = "";
 let copied = 0;
 let unreadable = 0;
-for (let batch = 0; batch < maxBatches; batch += 1) {
-  const result = await call("compact-observations-copy", { after, limit: batchSize });
-  const state = result.batch || {};
-  copied += Number(state.copied || 0);
-  unreadable += Number(state.unreadable || 0);
-  after = String(state.cursor || after);
-  if ((batch + 1) % 20 === 0 || state.done) {
-    console.log(JSON.stringify({ batch: batch + 1, copied, unreadable, cursor: after, done: Boolean(state.done) }));
+const sourceRows = Number(prepared.result?.sourceRows || 0);
+const shadowRows = Number(prepared.result?.shadowRows || 0);
+if (shadowRows < sourceRows) {
+  for (let batch = 0; batch < maxBatches; batch += 1) {
+    const result = await call("compact-observations-copy", { after, limit: batchSize });
+    const state = result.batch || {};
+    copied += Number(state.copied || 0);
+    unreadable += Number(state.unreadable || 0);
+    after = String(state.cursor || after);
+    if ((batch + 1) % 20 === 0 || state.done) {
+      console.log(JSON.stringify({ batch: batch + 1, copied, unreadable, cursor: after, done: Boolean(state.done) }));
+    }
+    if (state.done) break;
+    if (batch + 1 === maxBatches) throw new Error(`Copy did not finish in ${maxBatches} bounded batches.`);
   }
-  if (state.done) break;
-  if (batch + 1 === maxBatches) throw new Error(`Copy did not finish in ${maxBatches} bounded batches.`);
+} else {
+  console.log(JSON.stringify({ copied: 0, unreadable: 0, resumedVerifiedCopy: true, sourceRows, shadowRows }));
 }
 
 if (unreadable > 0) throw new Error(`${unreadable} source rows could not be decoded; refusing activation.`);
