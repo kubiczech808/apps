@@ -170,6 +170,43 @@ export const compactRun = (run = {}) => {
   return compact
 }
 
+const TERMINAL_PAPER_STATUSES = new Set(['closed', 'cancelled', 'rejected', 'expired'])
+
+const terminalPaperTradeTime = (trade) => {
+  const value = trade?.closedAt ?? trade?.cancelledAt ?? trade?.rejectedAt ?? trade?.expiredAt ?? trade?.updatedAt ?? trade?.createdAt
+  if (Number.isFinite(value)) return value
+  const parsed = Date.parse(value ?? '')
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+// A paper order remains executable only while it is open or running. Closed and
+// cancelled records are both terminal history, so they share one bounded
+// retention window. Otherwise a failed or withdrawn entry can grow the state
+// just as much as a closed trade.
+export const compactPaperTrades = (trades = []) => {
+  const records = Array.isArray(trades) ? trades : []
+  const active = records.filter((trade) => !TERMINAL_PAPER_STATUSES.has(trade?.status))
+  const terminal = records
+    .filter((trade) => TERMINAL_PAPER_STATUSES.has(trade?.status))
+    .sort((left, right) => terminalPaperTradeTime(right) - terminalPaperTradeTime(left))
+    .slice(0, MAX_CLOSED_TRADES)
+  return [...active, ...terminal]
+}
+
+// This must run independently of the selected executor. A live executor does
+// not create the paper executor, but its state still carries historical paper
+// orders left by previous simulations.
+export const compactPersistentState = (state) => {
+  if (!state || typeof state !== 'object') return state
+  if (state.paper && typeof state.paper === 'object') {
+    state.paper.trades = compactPaperTrades(state.paper.trades)
+  }
+  if (Array.isArray(state.runs)) {
+    state.runs = state.runs.map(compactRun).slice(0, MAX_RUNS)
+  }
+  return state
+}
+
 export const recordRun = (state, run) => {
   state.runs = [compactRun(run), ...(state.runs ?? []).map(compactRun)].slice(0, MAX_RUNS)
   return state

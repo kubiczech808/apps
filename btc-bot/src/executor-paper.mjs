@@ -12,24 +12,10 @@
 
 import { carryForSettlement } from './funding.mjs'
 import { effectiveLinearFillPrice, pnlSats, SATS_PER_BTC } from './risk.mjs'
-import { MAX_CLOSED_TRADES } from './state.mjs'
+import { compactPaperTrades } from './state.mjs'
 
 const HOUR_MS = 60 * 60_000
 const TIMEFRAME_HOURS = { '1h': 1, '4h': 4, '1d': 24 }
-
-// Keep all executable records, but retain only the same bounded closed-history
-// horizon that the dashboard publishes. The paper store is persisted inside
-// the state document, so without this cap each historical test trade grows
-// every future live publication.
-export const compactPaperTrades = (trades = []) => {
-  const records = Array.isArray(trades) ? trades : []
-  const active = records.filter((trade) => trade?.status !== 'closed')
-  const closed = records
-    .filter((trade) => trade?.status === 'closed')
-    .sort((left, right) => (right.closedAt ?? 0) - (left.closedAt ?? 0))
-    .slice(0, MAX_CLOSED_TRADES)
-  return [...active, ...closed]
-}
 
 export const createPaperExecutor = ({
   store,

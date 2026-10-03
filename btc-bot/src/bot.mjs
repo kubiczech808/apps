@@ -31,6 +31,7 @@ import {
 } from './strategy-price-action-structure.mjs'
 import {
   capClosed,
+  compactPersistentState,
   computeStats,
   emptyState,
   lastLossAt,
@@ -709,6 +710,7 @@ export const runPass = async ({
   // A state document published by an older build has no paper store, and the
   // paper executor writes straight into it.
   state.paper ??= { balanceSats: 0, trades: [], nextId: 1 }
+  compactPersistentState(state)
   const settings = state.settings
   const activeStrategy = strategyConfig(settings.strategyId)
 
@@ -737,6 +739,7 @@ export const runPass = async ({
       run.reason = `another runner holds the lease (${lease?.owner ?? 'unknown'})`
       recordRun(state, { ...run, durationMs: Date.now() - startedAt })
       state.updatedAt = isoNow(now)
+      compactPersistentState(state)
       const saved = await store.save(state, { localOnly: true })
       return { state, run, saved }
     }
@@ -1267,6 +1270,7 @@ export const runPass = async ({
   recordRun(state, run)
   state.updatedAt = isoNow(now)
   state.savedBy = config.runner
+  compactPersistentState(state)
   // A runner that could not even acquire a lease may keep a local diagnostic,
   // but it must never publish over the runner that owns the current state.
   const saved = await store.save(state, { localOnly: !leaseAcquired })

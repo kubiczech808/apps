@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { MAX_CLOSED_TRADES, MAX_RUNS, recordRun } from '../src/state.mjs'
+import { compactPersistentState, MAX_CLOSED_TRADES, MAX_RUNS, recordRun } from '../src/state.mjs'
 import { createPaperExecutor } from '../src/executor-paper.mjs'
 
 test('run history keeps execution facts without retaining complete order plans', () => {
@@ -37,21 +37,43 @@ test('run history keeps execution facts without retaining complete order plans',
   assert.equal('order' in state.runs.at(-1).priceActionExecutions[0], false)
 })
 
-test('paper state caps old closed trades while retaining executable records', () => {
+test('paper state caps terminal history while retaining executable records', () => {
   const closed = Array.from({ length: MAX_CLOSED_TRADES + 25 }, (_, index) => ({
     id: `closed-${index}`,
     status: 'closed',
     closedAt: index,
   }))
+  const cancelled = Array.from({ length: MAX_CLOSED_TRADES + 25 }, (_, index) => ({
+    id: `cancelled-${index}`,
+    status: 'cancelled',
+    cancelledAt: MAX_CLOSED_TRADES + 25 + index,
+  }))
   const running = { id: 'running', status: 'running' }
   const order = { id: 'order', status: 'open' }
-  const store = { balanceSats: 1_000_000, trades: [...closed, running, order], nextId: 1 }
+  const store = { balanceSats: 1_000_000, trades: [...closed, ...cancelled, running, order], nextId: 1 }
 
   createPaperExecutor({ store })
 
-  assert.equal(store.trades.filter((trade) => trade.status === 'closed').length, MAX_CLOSED_TRADES)
-  assert.ok(store.trades.some((trade) => trade.id === 'closed-524'))
+  const terminal = store.trades.filter((trade) => ['closed', 'cancelled'].includes(trade.status))
+  assert.equal(terminal.length, MAX_CLOSED_TRADES)
+  assert.ok(store.trades.some((trade) => trade.id === 'cancelled-524'))
   assert.equal(store.trades.some((trade) => trade.id === 'closed-0'), false)
   assert.ok(store.trades.includes(running))
   assert.ok(store.trades.includes(order))
+})
+
+test('persistent state compacts paper history even without a paper executor', () => {
+  const cancelled = Array.from({ length: MAX_CLOSED_TRADES + 1 }, (_, index) => ({
+    id: `cancelled-${index}`,
+    status: 'cancelled',
+    cancelledAt: index,
+  }))
+  const active = { id: 'open', status: 'open' }
+  const state = { paper: { trades: [...cancelled, active] }, runs: [] }
+
+  compactPersistentState(state)
+
+  assert.equal(state.paper.trades.length, MAX_CLOSED_TRADES + 1)
+  assert.ok(state.paper.trades.includes(active))
+  assert.equal(state.paper.trades.some((trade) => trade.id === 'cancelled-0'), false)
 })
