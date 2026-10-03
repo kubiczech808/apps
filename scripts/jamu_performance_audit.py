@@ -69,8 +69,25 @@ def main() -> int:
                 },
                 timeout=120,
             )
-            response.raise_for_status()
-            result['pages'][label] = response.json()
+            try:
+                response.raise_for_status()
+                result['pages'][label] = response.json()
+            except (requests.RequestException, ValueError) as exc:
+                # Preserve a compact, sanitized diagnostic report. A read-only
+                # audit should make a bridge issue observable without failing
+                # before its report can be committed.
+                sample = response.text[:500] if response.content else ''
+                result['pages'][label] = {
+                    'audit_error': type(exc).__name__,
+                    'http_status': response.status_code,
+                    'content_type': response.headers.get('content-type', ''),
+                    'body_bytes': len(response.content),
+                    'starts_with_html': sample.lstrip().lower().startswith(('<!doctype', '<html')),
+                    'contains_php_error': any(
+                        marker in sample.lower()
+                        for marker in ('fatal error', 'parse error', 'warning:', 'uncaught')
+                    ),
+                }
         output = Path('jamu-content/performance-audit.json')
         output.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')
         print(json.dumps(result, ensure_ascii=False, indent=2))
