@@ -111,6 +111,9 @@ const state = {
   // overview or opened positions. Keep requests per portfolio so a tab can render first.
   liveExecutionStateRequests: {},
   liveExecutionStateFetchedAt: {},
+  // Direct RPi DIP fills bypass a normal executor run. Keep their small, durable run-log
+  // feed per portfolio so a fill cannot be visible in Positions while absent from Run log.
+  liveDirectEntryRunsByMode: {},
   // Cross-portfolio order ownership is intentionally compact. Loading every portfolio's
   // complete execution log here made a simple tab or portfolio switch parse tens of MB.
   // The API assembles the durable token/price/owner records once on the server instead.
@@ -1267,6 +1270,34 @@ function derivedTennisTourTags(item = {}) {
   return tags;
 }
 
+// Gamma's compact market response can omit event tags while retaining unmistakable fixture
+// metadata. Keep the broad scan taxonomy visible for such rows; official tags still win and
+// this intentionally does not invent a narrow league or competition label.
+function inferredSportsTaxonomyTags(item = {}) {
+  const source = item?.sourceEvaluation && typeof item.sourceEvaluation === "object"
+    ? item.sourceEvaluation
+    : null;
+  const events = [item, source].flatMap((holder) => Array.isArray(holder?.events) ? holder.events : [])
+    .filter((event) => event && typeof event === "object");
+  const sources = [item, ...(source ? [source] : []), ...events];
+  const isSportsFixture = sources.some((holder) => Boolean(
+    holder?.sportsMarketType
+    || holder?.gameStartTime
+    || holder?.sport
+    || holder?.sportSlug
+    || holder?.gameId
+    || (Array.isArray(holder?.teams) && holder.teams.length)
+    || /^exact score:/i.test(String(holder?.question || holder?.title || "")),
+  ));
+  if (!isSportsFixture) return [];
+  const identity = sources.flatMap((holder) => [
+    holder?.eventSlug, holder?.slug, holder?.question, holder?.title,
+    holder?.seriesSlug, holder?.league, holder?.sport,
+  ]).filter(Boolean).join(" ").toLowerCase();
+  const esports = /\b(?:esports?|counter[- ]?strike|cs2|dota(?:[- ]?2)?|league[- ]?of[- ]?legends|lol|valorant|overwatch|rainbow[- ]?six|rocket[- ]?league|starcraft|call[- ]?of[- ]?duty|fortnite|pubg|mobile[- ]?legends|free[- ]?fire)\b/.test(identity);
+  return esports ? ["esports", "sports"] : ["sports"];
+}
+
 function marketTagSlugsOf(item = {}) {
   const listFields = ["polymarketTags", "tags", "firstPolymarketTags", "firstTags",
     "polymarketCategories", "firstPolymarketCategories"];
@@ -1286,6 +1317,19 @@ function marketTagSlugsOf(item = {}) {
     if (tag) slugs.add(tag);
   }
   for (const tag of derivedTennisTourTags(item)) slugs.add(tag);
+  // Inline for the small reader extracted by the tag-contract tests. It mirrors the
+  // scraper fallback for old catalogue rows that predate the repaired tag relation.
+  const holders = [item, item?.sourceEvaluation].filter((holder) => holder && typeof holder === "object");
+  const sportsEvidence = holders.some((holder) => holder?.sportsMarketType || holder?.gameStartTime
+    || holder?.sport || holder?.sportSlug || holder?.gameId
+    || (Array.isArray(holder?.teams) && holder.teams.length));
+  const fixtureQuestion = String(item?.question || item?.title || "");
+  if (sportsEvidence || /^exact score:/i.test(fixtureQuestion)) {
+    const identity = holders.flatMap((holder) => [holder?.eventSlug, holder?.slug, holder?.question,
+      holder?.title, holder?.seriesSlug, holder?.league, holder?.sport]).filter(Boolean).join(" ").toLowerCase();
+    if (/\b(?:esports?|counter[- ]?strike|cs2|dota(?:[- ]?2)?|league[- ]?of[- ]?legends|lol|valorant|overwatch|rainbow[- ]?six|rocket[- ]?league|starcraft|call[- ]?of[- ]?duty|fortnite|pubg|mobile[- ]?legends|free[- ]?fire)\b/.test(identity)) slugs.add("esports");
+    slugs.add("sports");
+  }
   return slugs;
 }
 
@@ -3498,6 +3542,19 @@ function taxonomyValuesFromRecord(item, kind) {
   }
   if (kind === "tag") {
     for (const tag of derivedTennisTourTags(item)) values.add(tag);
+    // Keep the taxonomy picker aligned with the tag reader even for legacy rows that
+    // have fixture metadata but were stored before their event tags were materialized.
+    const holders = [item, item?.sourceEvaluation].filter((holder) => holder && typeof holder === "object");
+    const sportsEvidence = holders.some((holder) => holder?.sportsMarketType || holder?.gameStartTime
+      || holder?.sport || holder?.sportSlug || holder?.gameId
+      || (Array.isArray(holder?.teams) && holder.teams.length));
+    const fixtureQuestion = String(item?.question || item?.title || "");
+    if (sportsEvidence || /^exact score:/i.test(fixtureQuestion)) {
+      const identity = holders.flatMap((holder) => [holder?.eventSlug, holder?.slug, holder?.question,
+        holder?.title, holder?.seriesSlug, holder?.league, holder?.sport]).filter(Boolean).join(" ").toLowerCase();
+      if (/\b(?:esports?|counter[- ]?strike|cs2|dota(?:[- ]?2)?|league[- ]?of[- ]?legends|lol|valorant|overwatch|rainbow[- ]?six|rocket[- ]?league|starcraft|call[- ]?of[- ]?duty|fortnite|pubg|mobile[- ]?legends|free[- ]?fire)\b/.test(identity)) values.add("esports");
+      values.add("sports");
+    }
   }
   return values;
 }
@@ -10922,11 +10979,18 @@ async function ensureLiveExecutionState(mode = state.mode) {
       // run log even though the server already has the previous complete file. The state
       // endpoint retries those short upload windows and always reads this exact portfolio.
       const executionTarget = liveExecutionStateTarget(executionMode);
-      const execution = await fetchApiJson(
-        `api.php?action=state&target=${encodeURIComponent(executionTarget)}&summary=dashboard`,
-      );
+      const portfolioId = executionScopeStrategyIdForMode(executionMode);
+      const [execution, directEntries] = await Promise.all([
+        fetchApiJson(`api.php?action=state&target=${encodeURIComponent(executionTarget)}&summary=dashboard`),
+        fetchApiJson(`api.php?action=live-dip-entry-log&portfolio_id=${encodeURIComponent(portfolioId)}`)
+          .catch(() => null),
+      ]);
       state.liveExecutionByMode = state.liveExecutionByMode || {};
       state.liveExecutionByMode[executionMode] = execution;
+      if (Array.isArray(directEntries?.records)) {
+        state.liveDirectEntryRunsByMode = state.liveDirectEntryRunsByMode || {};
+        state.liveDirectEntryRunsByMode[executionMode] = directEntries.records;
+      }
       state.liveExecutionStateFetchedAt[executionMode] = Date.now();
       rememberLiveExecutionState(executionMode, execution);
       if (executionMode === "live-5050") state.live5050ExecutionState = execution;
@@ -13407,6 +13471,7 @@ function sourceMarketTags(source) {
     }
   }
   for (const tag of derivedTennisTourTags(source)) result.add(tag);
+  for (const tag of inferredSportsTaxonomyTags(source)) result.add(tag);
   return [...result];
 }
 
@@ -15525,8 +15590,12 @@ function liveRunLogRows() {
   // separately, so its tab shows only what its own executor recorded.
   const fromLiveState = !isFixedEntryMode() && Array.isArray(state.liveState?.runLog) ? state.liveState.runLog : [];
   const fromExecutionState = Array.isArray(state.liveExecutionState?.runLog) ? state.liveExecutionState.runLog : [];
+  const directDipEntries = Array.isArray(state.liveDirectEntryRunsByMode?.[normalizeMode(state.mode)])
+    ? state.liveDirectEntryRunsByMode[normalizeMode(state.mode)]
+    : [];
   rows.push(...fromLiveState);
   rows.push(...fromExecutionState);
+  rows.push(...directDipEntries);
   // Runs that never started. Both lists above are written by the runner at the end of a
   // run, so a dispatch GitHub refuses leaves nothing in either -- the log then jumps
   // straight past an execution the user watched fail.
@@ -17086,6 +17155,7 @@ function portfolioAnalysisTags(trade) {
     if (tag) tags.add(tag);
   }
   for (const tag of derivedTennisTourTags(trade)) tags.add(tag);
+  for (const tag of inferredSportsTaxonomyTags(trade)) tags.add(tag);
   return [...tags];
 }
 

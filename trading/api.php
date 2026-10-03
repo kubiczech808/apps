@@ -2083,6 +2083,64 @@ function derived_market_tag_slugs(array $item): array
 }
 
 /**
+ * Gamma occasionally returns a sports market without its parent event's tag relation. The
+ * market still carries first-party fixture metadata, so retain a broad sports/esports label
+ * rather than making it invisible to a portfolio whose allowed tags are the scan scope.
+ * These labels supplement official tags; they never replace or guess a narrow competition.
+ */
+function inferred_sports_taxonomy_tags(array $item): array
+{
+    $sources = [$item];
+    if (is_array($item['sourceEvaluation'] ?? null)) {
+        $sources[] = $item['sourceEvaluation'];
+    }
+    foreach ($sources as $source) {
+        foreach (is_array($source['events'] ?? null) ? $source['events'] : [] as $event) {
+            if (is_array($event)) {
+                $sources[] = $event;
+            }
+        }
+    }
+    $sportsFixture = false;
+    $identity = '';
+    foreach ($sources as $source) {
+        if (!is_array($source)) {
+            continue;
+        }
+        $sport = $source['sport'] ?? ($source['sportSlug'] ?? '');
+        if (is_array($sport)) {
+            $sport = $sport['slug'] ?? $sport['name'] ?? $sport['label'] ?? '';
+        }
+        $question = (string) ($source['question'] ?? $source['title'] ?? '');
+        $sportsFixture = $sportsFixture
+            || trim((string) ($source['sportsMarketType'] ?? '')) !== ''
+            || trim((string) ($source['gameStartTime'] ?? '')) !== ''
+            || trim((string) $sport) !== ''
+            || trim((string) ($source['gameId'] ?? '')) !== ''
+            || (is_array($source['teams'] ?? null) && $source['teams'] !== [])
+            || preg_match('/^exact score:/i', $question) === 1;
+        foreach (['eventSlug', 'slug', 'question', 'title', 'seriesSlug', 'league', 'sport'] as $field) {
+            $raw = $source[$field] ?? '';
+            if (is_array($raw)) {
+                $raw = $raw['slug'] ?? $raw['name'] ?? $raw['label'] ?? '';
+            }
+            $value = trim((string) $raw);
+            if ($value !== '') {
+                $identity .= ' ' . strtolower($value);
+            }
+        }
+    }
+    if (!$sportsFixture) {
+        return [];
+    }
+    $esports = preg_match(
+        '/\\b(?:esports?|counter[- ]?strike|cs2|dota(?:[- ]?2)?|league[- ]?of[- ]?legends|lol|valorant|overwatch|rainbow[- ]?six|rocket[- ]?league|starcraft|call[- ]?of[- ]?duty|fortnite|pubg|mobile[- ]?legends|free[- ]?fire)\\b/i',
+        $identity,
+    ) === 1;
+    return $esports ? ['esports', 'sports'] : ['sports'];
+}
+
+/**
  * The taxonomy labels the performance tables group a row under, ported from the
  * bot's scrapedSimulationTaxonomy(). Scrape-time relations win, the current Gamma
  * relation is the fallback for rows stored before the immutable field existed, and
@@ -2130,6 +2188,11 @@ function simulation_taxonomy_labels(array $item, string $firstField, string $cur
     // Derived tags belong only to the tag taxonomy, never to the categories table.
     if ($firstField === 'firstPolymarketTags') {
         foreach (derived_market_tag_slugs($item) as $tag) {
+            if (!in_array($tag, $labels, true)) {
+                $labels[] = $tag;
+            }
+        }
+        foreach (inferred_sports_taxonomy_tags($item) as $tag) {
             if (!in_array($tag, $labels, true)) {
                 $labels[] = $tag;
             }
@@ -2809,6 +2872,9 @@ function execution_scope_observation_tags(array $item): array
         }
     }
     foreach (derived_market_tag_slugs($item) as $tag) {
+        $values[] = $tag;
+    }
+    foreach (inferred_sports_taxonomy_tags($item) as $tag) {
         $values[] = $tag;
     }
     return normalize_market_tag_list($values);
@@ -6402,6 +6468,65 @@ function live_dip_entry_ownership_records(): array
 }
 
 /**
+ * Direct DIP fills are not normal executor runs: the RPi worker places them between the
+ * portfolio cron executions. The ownership ledger is therefore also their durable run-log
+ * source. Rendering it from the same record means a fill cannot be visible as a position
+ * yet absent from the portfolio audit, even if the next executor upload replaces its state.
+ */
+function live_dip_entry_run_log_records(string $portfolioId, int $limit = 400): array
+{
+    $portfolioId = trim($portfolioId);
+    $limit = max(1, min(2000, $limit));
+    $records = [];
+    foreach (live_dip_entry_ownership_records() as $entry) {
+        if (!is_array($entry) || (string) ($entry['portfolioId'] ?? '') !== $portfolioId) {
+            continue;
+        }
+        $tokenId = trim((string) ($entry['tokenId'] ?? ''));
+        $at = trim((string) ($entry['at'] ?? ''));
+        if ($tokenId === '' || $at === '') {
+            continue;
+        }
+        $price = is_numeric($entry['price'] ?? null) ? (float) $entry['price'] : null;
+        $stake = is_numeric($entry['stakeUsdc'] ?? $entry['entryVolumeUsdc'] ?? null)
+            ? (float) ($entry['stakeUsdc'] ?? $entry['entryVolumeUsdc'])
+            : null;
+        $question = trim((string) ($entry['question'] ?? ''));
+        $outcome = trim((string) ($entry['outcome'] ?? ''));
+        $records[] = [
+            'id' => 'dip-entry-' . hash('sha256', implode('|', [$portfolioId, $tokenId, (string) ($price ?? ''), $at])),
+            'runAt' => $at,
+            'generatedAt' => $at,
+            'strategyId' => $portfolioId,
+            'action' => 'DIP_ENTRY_SUBMITTED',
+            'reason' => $question !== ''
+                ? 'DIP entry filled for "' . $question . '"' . ($outcome !== '' ? ' / ' . $outcome : '') . '.'
+                : 'DIP entry filled and attributed to this portfolio.',
+            'selected' => array_filter([
+                'tokenId' => $tokenId,
+                'question' => $question !== '' ? $question : null,
+                'outcome' => $outcome !== '' ? $outcome : null,
+                'url' => $entry['url'] ?? null,
+                'marketPrice' => $price,
+                'marketProbability' => $entry['marketProbability'] ?? $price,
+                'shares' => $entry['shares'] ?? null,
+                'stakeUsdc' => $stake,
+            ], static fn ($value): bool => $value !== null && $value !== ''),
+            'attempts' => [[
+                'action' => 'DIP_ENTRY_SUBMITTED',
+                'tokenId' => $tokenId,
+                'orderPrice' => $price,
+                'shares' => $entry['shares'] ?? null,
+                'question' => $question !== '' ? $question : null,
+                'outcome' => $outcome !== '' ? $outcome : null,
+            ]],
+        ];
+    }
+    usort($records, static fn (array $left, array $right): int => strcmp((string) $right['runAt'], (string) $left['runAt']));
+    return array_slice($records, 0, $limit);
+}
+
+/**
  * One entry per token a LIVE dip-entry fill ordered, written the moment the RPi worker's
  * own signed FOK fills. This is the one order-placement path that never runs through
  * live-order-executor.mjs, and so never reaches that script's own orderOwnership write --
@@ -6463,6 +6588,14 @@ function record_live_dip_entry_ownership(array $input): array
         'mode' => 'live',
         'at' => $at,
         'entryVolumeUsdc' => $entryVolumeUsdc,
+        // Enough context to make the direct fill a first-class run-log row. It is optional
+        // so historical ownership retries continue to heal without inventing details.
+        'stakeUsdc' => is_numeric($input['stakeUsdc'] ?? null) ? (float) $input['stakeUsdc'] : $entryVolumeUsdc,
+        'shares' => is_numeric($input['shares'] ?? null) ? (float) $input['shares'] : null,
+        'question' => trim((string) ($input['question'] ?? '')),
+        'outcome' => trim((string) ($input['outcome'] ?? '')),
+        'url' => trim((string) ($input['url'] ?? '')),
+        'marketProbability' => is_numeric($input['marketProbability'] ?? null) ? (float) $input['marketProbability'] : $price,
     ]);
     if (count($ownership) > LIVE_DIP_ENTRY_OWNERSHIP_LIMIT) {
         $ownership = array_slice($ownership, 0, LIVE_DIP_ENTRY_OWNERSHIP_LIMIT);
@@ -8645,6 +8778,19 @@ try {
                 'density' => trading_storage_row_density($pdo),
             ]);
         }
+        // A mirror may persist the terminal Gamma payload immediately before its lifecycle
+        // write is interrupted. Reconcile only rows that already prove their own settlement;
+        // end dates and a 0/1-looking live quote are deliberately not enough evidence.
+        if ($operation === 'reconcile-resolved-observations') {
+            @set_time_limit(0);
+            @ignore_user_abort(true);
+            $result = trading_storage_reconcile_resolved_observations(
+                $pdo,
+                (int) ($storageRequest['limit'] ?? 1000),
+                (int) ($storageRequest['olderThanDays'] ?? 7),
+            );
+            respond(['ok' => true, 'operation' => 'reconcile-resolved-observations', 'batch' => $result]);
+        }
         // Moves settled observations out of MySQL into gzipped NDJSON, one bounded batch at a
         // time. The statistics keep reading them: the fold streams the archive alongside the
         // table, so what leaves the database does not leave the Setup finder.
@@ -10296,6 +10442,22 @@ try {
         $payload = json_decode((string) file_get_contents('php://input'), true);
         $result = record_live_dip_entry_ownership(is_array($payload) ? $payload : []);
         respond($result, ($result['ok'] ?? false) ? 200 : 400);
+    }
+
+    // Direct RPi DIP fills bypass the normal executor state. Their ownership ledger is the
+    // durable run-log source, exposed separately so a state upload cannot make a real fill
+    // disappear from the portfolio's Run log.
+    if ($action === 'live-dip-entry-log') {
+        $portfolioId = trim((string) ($_GET['portfolio_id'] ?? ''));
+        if (!preg_match('/^(?:live|live5050|live-custom-[a-z][a-zA-Z0-9]{1,30})$/', $portfolioId)) {
+            respond(['ok' => false, 'error' => 'A valid live portfolio id is required.'], 400);
+        }
+        respond([
+            'ok' => true,
+            'portfolioId' => $portfolioId,
+            'records' => live_dip_entry_run_log_records($portfolioId),
+            'generatedAt' => gmdate('c'),
+        ]);
     }
 
     if ($action === 'state') {

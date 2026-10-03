@@ -38,7 +38,7 @@ on:
       keep_days:
         description: "Leave settled rows updated within this many days in place (0 = archive all)"
         required: false
-        default: "0"
+        default: "7"
 
 jobs:
   archive:
@@ -51,13 +51,76 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Reconcile terminal snapshots before archival
+        id: reconcile
+        env:
+          TRADING_TRIGGER_KEY: ${{ secrets.POLYTRADING_DB_PASSWORD }}
+          BATCHES: ${{ github.event.inputs.batches || '12' }}
+          LIMIT: ${{ github.event.inputs.limit || '3000' }}
+          KEEP_DAYS: ${{ github.event.inputs.keep_days || '7' }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+
+          key = os.environ["TRADING_TRIGGER_KEY"]
+          url = "https://www.osobnizkusenosti.cz/trading/api.php?action=storage-admin"
+          batches = max(1, min(40, int(os.environ.get("BATCHES") or 5)))
+          limit = max(50, min(5000, int(os.environ.get("LIMIT") or 1000)))
+          older_than_days = max(1, int(os.environ.get("KEEP_DAYS") or 7))
+
+          def call(payload):
+              request = urllib.request.Request(
+                  url,
+                  data=json.dumps(payload).encode("utf-8"),
+                  method="POST",
+                  headers={"Content-Type": "application/json", "X-Trading-Trigger-Key": key},
+              )
+              try:
+                  with urllib.request.urlopen(request, timeout=900) as response:
+                      return json.loads(response.read().decode("utf-8"))
+              except urllib.error.HTTPError as error:
+                  body = error.read().decode("utf-8", "replace")[:600]
+                  raise SystemExit(f"HTTP {error.code} from reconciliation: {body}")
+
+          examined = proved = reconciled = unreadable = 0
+          for index in range(batches):
+              payload = call({
+                  "operation": "reconcile-resolved-observations",
+                  "limit": limit,
+                  "olderThanDays": older_than_days,
+              })
+              if not payload.get("ok"):
+                  raise SystemExit(payload.get("error") or "reconciliation refused")
+              batch = payload.get("batch") or {}
+              examined += int(batch.get("examined") or 0)
+              proved += int(batch.get("proved") or 0)
+              reconciled += int(batch.get("reconciled") or 0)
+              unreadable += int(batch.get("unreadable") or 0)
+              print(
+                  f"batch {index + 1}: examined {batch.get('examined')}, "
+                  f"proved {batch.get('proved')}, reconciled {batch.get('reconciled')}, "
+                  f"unreadable {batch.get('unreadable')}"
+              )
+              if batch.get("done"):
+                  break
+          print(
+              f"terminal snapshot reconciliation: examined {examined}, proved {proved}, "
+              f"reconciled {reconciled}, unreadable {unreadable}"
+          )
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as handle:
+              handle.write(f"reconciled={reconciled}\\n")
+          PY
+
       - name: Archive settled observations, verifying before each delete
         id: archive
         env:
           TRADING_TRIGGER_KEY: ${{ secrets.POLYTRADING_DB_PASSWORD }}
           BATCHES: ${{ github.event.inputs.batches || '12' }}
           LIMIT: ${{ github.event.inputs.limit || '3000' }}
-          KEEP_DAYS: ${{ github.event.inputs.keep_days || '0' }}
+          KEEP_DAYS: ${{ github.event.inputs.keep_days || '7' }}
         run: |
           python3 - <<'PY'
           import json

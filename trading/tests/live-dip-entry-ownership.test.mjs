@@ -99,6 +99,16 @@ test("a live dip-entry fill is recorded as this portfolio's ownership", () => {
   assert.equal(outcome.ledger.records[0].mode, "live");
 });
 
+test("a direct dip fill is also exposed as a durable portfolio run-log row", () => {
+  assert.match(API, /function live_dip_entry_run_log_records\(string \$portfolioId, int \$limit = 400\): array/);
+  assert.match(API, /'action' => 'DIP_ENTRY_SUBMITTED'/);
+  assert.match(API, /if \(\$action === 'live-dip-entry-log'\)/);
+  assert.match(API, /'records' => live_dip_entry_run_log_records\(\$portfolioId\)/);
+  const app = readFileSync(new URL("../assets/app.js", import.meta.url), "utf8");
+  assert.match(app, /api\.php\?action=live-dip-entry-log&portfolio_id=/);
+  assert.match(app, /rows\.push\(\.\.\.directDipEntries\)/);
+});
+
 test("portfolioId and tokenId are both required", () => {
   const outcome = withTempDataDir((dir) => record(dir, { portfolioId: "live-custom-dip704060live" }));
   assert.equal(outcome.result.ok, false);

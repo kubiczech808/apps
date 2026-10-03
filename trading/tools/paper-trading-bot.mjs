@@ -2969,9 +2969,10 @@ function withLastLiveMarketProbability(item = {}) {
 }
 
 function withFirstObservationMetadata(item = {}) {
+  const tagged = withFallbackMarketTaxonomyTags(item);
   return {
-    ...withLastLiveMarketProbability(item),
-    ...Object.fromEntries(Object.entries(firstObservationMetadata(item)).filter(([, value]) => value != null && value !== "")),
+    ...withLastLiveMarketProbability(tagged),
+    ...Object.fromEntries(Object.entries(firstObservationMetadata(tagged)).filter(([, value]) => value != null && value !== "")),
   };
 }
 
@@ -4466,7 +4467,8 @@ function tagQuestion(question) {
   if (/\b(bitcoin|btc|ethereum|eth|crypto|solana|xrp)\b/.test(text)) tags.push("crypto");
   if (/\b(fed|rate|inflation|cpi|jobs|unemployment|gdp)\b/.test(text)) tags.push("macro");
   if (/\b(election|president|senate|congress|minister|vote|referendum)\b/.test(text)) tags.push("politics");
-  if (/\b(nba|nfl|mlb|nhl|ufc|world cup|champions|match|game|tournament)\b/.test(text)) tags.push("sports");
+  if (/\b(nba|nfl|mlb|nhl|ufc|world cup|champions|match|game|tournament)\b/.test(text)
+    || /^exact score:/i.test(String(question || ""))) tags.push("sports");
   if (/\b(will|by|before|on|in 2026|in 2027)\b/.test(text)) tags.push("clear-resolution");
   return tags.length ? tags : ["general"];
 }
@@ -8533,6 +8535,17 @@ function rowTagSlugs(item = {}) {
   // here as well so an include-only ATP/WTA policy cannot pass discovery and then fail
   // during the final paper-trade validation.
   for (const tag of derivedMarketTags(item)) slugs.add(tag);
+  // Kept inline because this pure reader is extracted by the contract tests. A compact
+  // Gamma response can be missing event tags yet still prove it is a sports fixture.
+  const sportsEvidence = item?.sportsMarketType || item?.gameStartTime || item?.sport
+    || item?.sportSlug || item?.gameId || (Array.isArray(item?.teams) && item.teams.length);
+  const fixtureQuestion = String(item?.question || item?.title || "");
+  if (sportsEvidence || /^exact score:/i.test(fixtureQuestion)) {
+    const identity = [item?.eventSlug, item?.slug, item?.question, item?.title,
+      item?.seriesSlug, item?.league, item?.sport].filter(Boolean).join(" ").toLowerCase();
+    if (/\b(?:esports?|counter[- ]?strike|cs2|dota(?:[- ]?2)?|league[- ]?of[- ]?legends|lol|valorant|overwatch|rainbow[- ]?six|rocket[- ]?league|starcraft|call[- ]?of[- ]?duty|fortnite|pubg|mobile[- ]?legends|free[- ]?fire)\b/.test(identity)) slugs.add("esports");
+    slugs.add("sports");
+  }
   return slugs;
 }
 
@@ -10863,6 +10876,11 @@ function flattenEventMarkets(events = [], auditCalls = null) {
       categorySlug: event.categorySlug,
       categories: event.categories,
       tags: event.tags,
+      sport: event.sport,
+      sportSlug: event.sportSlug,
+      sportsMarketType: event.sportsMarketType,
+      gameId: event.gameId,
+      teams: event.teams,
       endDate: event.endDate || event.end_date,
     };
     const eventMarkets = parseJsonField(event.markets);
@@ -11070,6 +11088,48 @@ function derivedMarketTags(market = {}) {
   return tags;
 }
 
+// Some Gamma scan responses retain first-party sports metadata on a market but omit the
+// event relation where its browse tags live. Keep that market inside the sports catalogue;
+// otherwise a valid soccer fixture becomes untagged simply because of that API shape.
+// Esports are identified conservatively from durable game names in the event identity.
+function fallbackMarketTaxonomyTags(market = {}) {
+  const events = Array.isArray(market.events) ? market.events.filter((event) => event && typeof event === "object") : [];
+  const sources = [market, ...events];
+  const isSportsFixture = sources.some((source) => Boolean(
+    source?.sportsMarketType
+    || source?.gameStartTime
+    || source?.sport
+    || source?.sportSlug
+    || source?.gameId
+    || (Array.isArray(source?.teams) && source.teams.length),
+  ));
+  const fixtureQuestion = sources.map((source) => String(source?.question || source?.title || "")).join(" ");
+  if (!isSportsFixture && !/^exact score:/i.test(fixtureQuestion)) return [];
+  const identity = sources.flatMap((source) => [
+    source?.eventSlug, source?.slug, source?.question, source?.title,
+    source?.seriesSlug, source?.league, source?.sport,
+  ]).filter(Boolean).join(" ").toLowerCase();
+  const esports = /\b(?:esports?|counter[- ]?strike|cs2|dota(?:[- ]?2)?|league[- ]?of[- ]?legends|lol|valorant|overwatch|rainbow[- ]?six|rocket[- ]?league|starcraft|call[- ]?of[- ]?duty|fortnite|pubg|mobile[- ]?legends|free[- ]?fire)\b/.test(identity);
+  return esports ? ["esports", "sports"] : ["sports"];
+}
+
+// Preserve the smallest reliable taxonomy fallback on a stored observation. Gamma's event
+// relation is normally present, but a compact response can omit it. Without carrying this
+// repair into the stored row the next merge loses the only label a sports-scoped portfolio
+// can use. Official Polymarket tags are always retained and take precedence.
+function withFallbackMarketTaxonomyTags(item = {}) {
+  const inferred = fallbackMarketTaxonomyTags(item);
+  if (!inferred.length) return item;
+  const current = Array.isArray(item.polymarketTags) ? item.polymarketTags.filter(Boolean).map(String) : [];
+  const combined = [...new Set([...current, ...inferred])];
+  const firstCurrent = Array.isArray(item.firstPolymarketTags)
+    ? item.firstPolymarketTags.filter(Boolean).map(String)
+    : [];
+  const first = [...new Set([...(firstCurrent.length ? firstCurrent : combined), ...inferred])];
+  if (combined.length === current.length && first.length === firstCurrent.length) return item;
+  return { ...item, polymarketTags: combined, firstPolymarketTags: first };
+}
+
 function normalizedPolymarketTaxonomy(...sources) {
   const values = new Set();
   const add = (value) => {
@@ -11107,11 +11167,15 @@ function marketPolymarketCategories(market = {}) {
 }
 
 function marketPolymarketTags(market = {}) {
-  return normalizedPolymarketTaxonomy(
+  const tags = normalizedPolymarketTaxonomy(
     market.__scanCategoryTags,
     market.tags,
     ...(Array.isArray(market.events) ? market.events.map((event) => event?.tags) : []),
   );
+  for (const tag of fallbackMarketTaxonomyTags(market)) {
+    if (!tags.includes(tag)) tags.push(tag);
+  }
+  return tags;
 }
 
 function marketCategoryKeys(market = {}) {
@@ -11508,6 +11572,10 @@ function preferredMarketObservation(market, observedAt = nowIso()) {
     : marketExpectedRoi;
   const potentialAnnualizedReturn = annualizedPotentialReturn(netYield, days);
   const tags = tagQuestion(market.question || "");
+  const event = Array.isArray(market.events) ? market.events.find((item) => item && typeof item === "object") : null;
+  const sportValue = market.sport ?? market.sportSlug ?? event?.sport ?? event?.sportSlug ?? "";
+  const sportSlug = normalizedMarketCategory(sportValue);
+  const sportsMarketType = String(market.sportsMarketType ?? event?.sportsMarketType ?? "").trim();
   const polymarketCategories = marketPolymarketCategories(market);
   const polymarketTags = marketPolymarketTags(market);
   const derivedTags = derivedMarketTags(market);
@@ -11534,6 +11602,10 @@ function preferredMarketObservation(market, observedAt = nowIso()) {
     polymarketCategories,
     polymarketTags,
     derivedTags,
+    // Full event documents are not retained in every observation, but these small fields
+    // prove a compact row is a sports fixture when Gamma omitted its tag relation.
+    sportsMarketType: sportsMarketType || null,
+    sportSlug: sportSlug || null,
     riskCategory: risk.category,
     riskPrimaryEntity: risk.primaryEntity,
     riskGroupKeys: risk.keys,
@@ -12926,7 +12998,34 @@ function scrapedSimulationTaxonomy(item, firstField, currentField) {
   const sources = first.length ? [first] : [current];
   // ATP/WTA are derived from the durable event identity. Appending them here keeps the
   // historical statistics, the scraped table and the portfolio filter on one taxonomy.
-  if (firstField === "firstPolymarketTags") sources.push(derivedMarketTags(item));
+  if (firstField === "firstPolymarketTags") {
+    // Keep this fallback self-contained: the taxonomy drill-down tests intentionally
+    // evaluate this function without loading the scanner's broader helper set. The richer
+    // scanner fallback still persists these tags at ingestion; this branch repairs older
+    // compact rows that never carried their parent Gamma event tags.
+    const identity = [
+      item?.sportsMarketType,
+      item?.gameStartTime,
+      item?.sport,
+      item?.sportSlug,
+      item?.gameId,
+      Array.isArray(item?.teams) ? item.teams.join(" ") : "",
+      item?.question,
+      item?.title,
+    ].join(" ").toLowerCase();
+    const fallback = [];
+    if (identity.trim()) {
+      if (/(counter[ -]?strike|cs2|dota|league of legends|valorant|esports?)/i.test(identity)) {
+        fallback.push("esports");
+      }
+      if (item?.sportsMarketType || item?.gameStartTime || item?.sport || item?.sportSlug
+        || item?.gameId || (Array.isArray(item?.teams) && item.teams.length > 0)
+        || /^exact score\s*:/i.test(String(item?.question || item?.title || ""))) {
+        fallback.push("sports");
+      }
+    }
+    sources.push(derivedMarketTags(item), fallback);
+  }
   const seen = new Set();
   const labels = [];
   for (const source of sources) {

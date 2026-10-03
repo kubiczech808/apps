@@ -1957,6 +1957,111 @@ function trading_storage_count_archived_rows(string $path): int
     return $rows;
 }
 
+/**
+ * Whether a compact observation already carries enough durable settlement proof to move it
+ * from SCRAPED to RESOLVED without asking a remote API again.
+ *
+ * The mirror can be interrupted between receiving a terminal Gamma quote and persisting the
+ * lifecycle column. We must repair that mismatch before applying age retention, but a live
+ * quote near 0 or 1 is not settlement proof. `finalOutcomePrice` is written only by the
+ * terminal-resolution path, and it must be paired with Gamma's terminal status.
+ */
+function trading_storage_payload_proves_resolved(array $payload): bool
+{
+    $final = $payload['finalOutcomePrice'] ?? null;
+    if (!is_numeric($final)) {
+        return false;
+    }
+    $price = (float) $final;
+    if (!($price <= 0.001 || $price >= 0.999)) {
+        return false;
+    }
+
+    $status = strtoupper(trim((string) ($payload['status'] ?? $payload['selectionStatus'] ?? '')));
+    if ($status === 'RESOLVED') {
+        return true;
+    }
+    $closed = $payload['marketClosed'] ?? false;
+    return $closed === true || $closed === 1 || $closed === '1'
+        || (is_string($closed) && strtolower($closed) === 'true');
+}
+
+/**
+ * Reconcile stale rows that already include a verified terminal outcome but whose storage
+ * lifecycle was left as SCRAPED by an interrupted mirror. This deliberately does not infer
+ * settlement from end dates or current probability: inconclusive rows stay SCRAPED and are
+ * never eligible for the resolved archive.
+ */
+function trading_storage_reconcile_resolved_observations(PDO $pdo, int $limit = 1000, int $olderThanDays = 7): array
+{
+    trading_storage_bootstrap($pdo);
+    $limit = max(50, min(5000, $limit));
+    $olderThanDays = max(1, min(365, $olderThanDays));
+    $cutoff = gmdate('Y-m-d H:i:s', time() - ($olderThanDays * 86400));
+    $select = $pdo->prepare(
+        'SELECT observation_key, payload, updated_at
+         FROM trading_observations
+         WHERE lifecycle = "SCRAPED" AND updated_at < :cutoff
+         ORDER BY updated_at ASC, observation_key ASC
+         LIMIT ' . $limit
+    );
+    $select->execute(['cutoff' => $cutoff]);
+    $rows = $select->fetchAll();
+
+    if ($rows === []) {
+        return [
+            'examined' => 0,
+            'proved' => 0,
+            'reconciled' => 0,
+            'unreadable' => 0,
+            'done' => true,
+            'cutoff' => $cutoff,
+        ];
+    }
+
+    $update = $pdo->prepare(
+        'UPDATE trading_observations
+         SET lifecycle = "RESOLVED", payload = :payload, payload_checksum = :checksum,
+             updated_at = :updatedAt
+         WHERE observation_key = :key AND lifecycle = "SCRAPED"'
+    );
+    $proved = 0;
+    $reconciled = 0;
+    $unreadable = 0;
+    foreach ($rows as $row) {
+        $payload = trading_storage_unpack($row['payload'] ?? null);
+        if (!is_array($payload)) {
+            $unreadable++;
+            continue;
+        }
+        if (!trading_storage_payload_proves_resolved($payload)) {
+            continue;
+        }
+        $proved++;
+        // Do not manufacture or move resolvedAt/updatedAt. They drive chronological reports;
+        // this repair merely makes the terminal fact the row already carried queryable.
+        $payload['status'] = 'RESOLVED';
+        $payload['selectionStatus'] = 'RESOLVED';
+        $encoded = trading_storage_encode($payload);
+        $update->execute([
+            'payload' => trading_storage_pack_encoded($encoded),
+            'checksum' => hash('sha256', $encoded),
+            'updatedAt' => (string) ($row['updated_at'] ?? $cutoff),
+            'key' => (string) ($row['observation_key'] ?? ''),
+        ]);
+        $reconciled += $update->rowCount();
+    }
+
+    return [
+        'examined' => count($rows),
+        'proved' => $proved,
+        'reconciled' => $reconciled,
+        'unreadable' => $unreadable,
+        'done' => count($rows) < $limit,
+        'cutoff' => $cutoff,
+    ];
+}
+
 function trading_storage_archive_resolved_observations(PDO $pdo, int $limit = 2000, int $keepDays = 0): array
 {
     trading_storage_bootstrap($pdo);

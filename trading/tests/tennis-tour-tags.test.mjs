@@ -73,6 +73,18 @@ test("only the real WTA acronym derives a women's tour tag", () => {
   }
 });
 
+test("a compact sports fixture without parent tags stays visible to every portfolio reader", () => {
+  const soccer = { question: "Exact Score: Ferro Carril Oeste 0 - 1 Deportivo Madryn?", eventSlug: "argpn-fco-dma-2026-10-03-exact-score" };
+  const esports = { question: "Exact Score: Counter-Strike Team A 1 - 0 Team B?", eventSlug: "cs2-team-a-team-b-2026-10-03" };
+  for (const reader of [paperTags(), dashboardTags(), liveTags()]) {
+    assert.ok(reader(soccer).has("sports"), "sports fallback must survive a compact exact-score row");
+    assert.ok(reader(esports).has("sports"), "esports fallback is still a sports row");
+    assert.ok(reader(esports).has("esports"), "game identity must retain the esports scope");
+  }
+  assert.match(API, /function inferred_sports_taxonomy_tags\(array \$item\): array/);
+  assert.match(API, /foreach \(inferred_sports_taxonomy_tags\(\$item\) as \$tag\)/);
+});
+
 test("server taxonomy and persistence include derived tennis tours without treating them as categories", () => {
   assert.match(API, /function derived_market_tag_slugs\(array \$item\): array/);
   assert.match(API, /if \(\$firstField === 'firstPolymarketTags'\)/,

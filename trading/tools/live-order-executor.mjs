@@ -3535,6 +3535,18 @@ function marketTagSlugs(row = {}) {
   ]).filter(Boolean).join(" ").toLowerCase();
   if (/(^|[^a-z0-9])atp(?=$|[^a-z0-9])/.test(identity)) slugs.add("atp");
   if (/(^|[^a-z0-9])wta(?=$|[^a-z0-9])/.test(identity)) slugs.add("wta");
+  // Keep the final live check aligned with the scrape fallback even when it re-fetches a
+  // compact market document that lost the event's tags. Inline because this reader is
+  // deliberately executed in isolation by the tag-contract tests.
+  const holders = [row, source];
+  const sportsEvidence = holders.some((holder) => holder?.sportsMarketType || holder?.gameStartTime
+    || holder?.sport || holder?.sportSlug || holder?.gameId
+    || (Array.isArray(holder?.teams) && holder.teams.length));
+  const fixtureQuestion = String(row?.question || source?.question || row?.title || source?.title || "");
+  if (sportsEvidence || /^exact score:/i.test(fixtureQuestion)) {
+    if (/\b(?:esports?|counter[- ]?strike|cs2|dota(?:[- ]?2)?|league[- ]?of[- ]?legends|lol|valorant|overwatch|rainbow[- ]?six|rocket[- ]?league|starcraft|call[- ]?of[- ]?duty|fortnite|pubg|mobile[- ]?legends|free[- ]?fire)\b/.test(identity)) slugs.add("esports");
+    slugs.add("sports");
+  }
   return slugs;
 }
 

@@ -2439,7 +2439,7 @@ export async function recordDipEntryHit(plan, price, execution = {}) {
 // wrong policy for one more cycle, not that the fill itself is undone. The caller records the
 // failure in the worker's own event history so a persistent gap stays visible rather than
 // silent.
-export async function recordLiveDipEntryOwnership(portfolioId, tokenId, price, at, entryVolumeUsdc = null) {
+export async function recordLiveDipEntryOwnership(portfolioId, tokenId, price, at, entryVolumeUsdc = null, details = {}) {
   if (!TRADING_TRIGGER_KEY) return { ok: false, error: "dip entry ownership key is not configured" };
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 12000);
@@ -2451,7 +2451,19 @@ export async function recordLiveDipEntryOwnership(portfolioId, tokenId, price, a
         "x-trading-trigger-key": TRADING_TRIGGER_KEY,
         "user-agent": "trading-live-exit-worker/1.0",
       },
-      body: JSON.stringify({ portfolioId: String(portfolioId || ""), tokenId: String(tokenId || ""), price, at, entryVolumeUsdc }),
+      body: JSON.stringify({
+        portfolioId: String(portfolioId || ""),
+        tokenId: String(tokenId || ""),
+        price,
+        at,
+        entryVolumeUsdc,
+        stakeUsdc: details?.stakeUsdc ?? null,
+        shares: details?.shares ?? null,
+        question: details?.question || "",
+        outcome: details?.outcome || "",
+        url: details?.url || "",
+        marketProbability: details?.marketProbability ?? price,
+      }),
       signal: controller.signal,
     });
     const payload = await response.json().catch(() => ({}));
@@ -2617,6 +2629,7 @@ async function reconcilePendingDipEntryFills(context) {
       price,
       record.at,
       record.entryVolumeUsdc,
+      record,
     );
     if (ownership.ok) {
       delete pending[key];
@@ -2684,6 +2697,7 @@ async function retryPendingDipEntryOwnership(context) {
       ownership.price,
       ownership.at,
       ownership.entryVolumeUsdc,
+      ownership,
     );
     if (result.ok) {
       delete pending[key];
@@ -3028,6 +3042,12 @@ async function fireDipEntries(context, books, now) {
         price: response?.price ?? null,
         at: now,
         entryVolumeUsdc: response?.makerAmountUsdc ?? plan.stakeUsdc ?? null,
+        stakeUsdc: plan.stakeUsdc ?? null,
+        shares: response?.shares ?? null,
+        question: plan.question || "",
+        outcome: plan.outcome || "",
+        url: plan.url || "",
+        marketProbability: trigger.ask ?? null,
       };
       const ownership = await recordLiveDipEntryOwnership(
         ownershipRecord.portfolioId,
@@ -3035,6 +3055,7 @@ async function fireDipEntries(context, books, now) {
         ownershipRecord.price,
         ownershipRecord.at,
         ownershipRecord.entryVolumeUsdc,
+        ownershipRecord,
       );
       if (!ownership.ok) {
         // Kept inline because fireDipEntries is also exercised as an isolated unit in the
@@ -3061,6 +3082,11 @@ async function fireDipEntries(context, books, now) {
         claimId: response?.claimId ?? null,
         at: now,
         entryVolumeUsdc: response?.makerAmountUsdc ?? plan.stakeUsdc ?? null,
+        stakeUsdc: plan.stakeUsdc ?? null,
+        question: plan.question || "",
+        outcome: plan.outcome || "",
+        url: plan.url || "",
+        marketProbability: trigger.ask ?? null,
       });
       // Force a fresh account read before deciding whether the exchange's acknowledgement
       // became a fill. Until then the durable entry claim prevents another portfolio from
