@@ -112,24 +112,14 @@ function trading_storage_bootstrap(PDO $pdo): void
     );
     $pdo->exec(
         'CREATE TABLE IF NOT EXISTS trading_observations (
-            observation_key CHAR(64) NOT NULL PRIMARY KEY,
-            lifecycle VARCHAR(24) NOT NULL,
-            source_id VARCHAR(191) NULL,
-            token_id VARCHAR(191) NULL,
-            event_slug VARCHAR(191) NULL,
-            market_slug VARCHAR(191) NULL,
-            outcome_label VARCHAR(191) NULL,
-            market_type VARCHAR(16) NULL,
+            observation_key CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL PRIMARY KEY,
+            lifecycle ENUM(\'SCRAPED\', \'RESOLVED\') NOT NULL,
             end_at DATETIME NULL,
-            observed_at DATETIME NULL,
-            resolved_at DATETIME NULL,
             market_probability DECIMAL(12,9) NULL,
-            net_yield DECIMAL(18,9) NULL,
             annualized_return DECIMAL(24,9) NULL,
             volume_usdc DECIMAL(24,6) NULL,
-            tags_json LONGTEXT NULL,
             payload MEDIUMBLOB NOT NULL,
-            payload_checksum CHAR(64) NOT NULL,
+            payload_checksum CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
             created_at DATETIME(6) NOT NULL,
             updated_at DATETIME(6) NOT NULL,
             KEY trading_observations_lifecycle_end (lifecycle, end_at),
@@ -588,6 +578,81 @@ function trading_storage_optimize_schema(PDO $pdo): void
             $pdo->exec('ALTER TABLE `trading_observations` ADD INDEX `' . $index . '` ' . $columns);
         }
     }
+}
+
+/**
+ * The first version of trading_observations mirrored every field that was also inside the
+ * compressed payload. None of those copies is queried: the execution scope needs only the
+ * lifecycle, freshness, probability, horizon, volume and potential return. A newly-created
+ * table therefore uses the lean projection above. Existing installations remain readable and
+ * writable until their deliberate, space-checked schema migration completes.
+ */
+function trading_storage_observations_use_lean_schema(PDO $pdo): bool
+{
+    $cacheKey = spl_object_id($pdo);
+    if (isset($GLOBALS['trading_storage_observation_schema'][$cacheKey])) {
+        return $GLOBALS['trading_storage_observation_schema'][$cacheKey] === 'lean';
+    }
+    $statement = $pdo->prepare(
+        'SELECT 1 FROM information_schema.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = "trading_observations"
+           AND COLUMN_NAME = "source_id" LIMIT 1'
+    );
+    $statement->execute();
+    $lean = $statement->fetchColumn() === false;
+    $GLOBALS['trading_storage_observation_schema'][$cacheKey] = $lean ? 'lean' : 'legacy';
+    return $lean;
+}
+
+function trading_storage_forget_observation_schema(PDO $pdo): void
+{
+    unset($GLOBALS['trading_storage_observation_schema'][spl_object_id($pdo)]);
+}
+
+/** @return array<string, mixed> */
+function trading_storage_observation_statement_bindings(array $columns, bool $lean): array
+{
+    if (!$lean) {
+        return $columns;
+    }
+    return [
+        'key' => $columns['key'],
+        'lifecycle' => $columns['lifecycle'],
+        'endAt' => $columns['endAt'],
+        'probability' => $columns['probability'],
+        'annualizedReturn' => $columns['annualizedReturn'],
+        'volume' => $columns['volume'],
+        'payload' => $columns['payload'],
+        'checksum' => $columns['checksum'],
+        'createdAt' => $columns['createdAt'],
+        'updatedAt' => $columns['updatedAt'],
+    ];
+}
+
+function trading_storage_observation_insert_ignore_statement(PDO $pdo): PDOStatement
+{
+    if (!trading_storage_observations_use_lean_schema($pdo)) {
+        return $pdo->prepare(
+            'INSERT IGNORE INTO trading_observations (
+               observation_key, lifecycle, source_id, token_id, event_slug, market_slug, outcome_label, market_type,
+               end_at, observed_at, resolved_at, market_probability, net_yield, annualized_return, volume_usdc,
+               tags_json, payload, payload_checksum, created_at, updated_at
+             ) VALUES (
+               :key, :lifecycle, :sourceId, :tokenId, :eventSlug, :marketSlug, :outcome, :marketType,
+               :endAt, :observedAt, :resolvedAt, :probability, :netYield, :annualizedReturn, :volume,
+               :tags, :payload, :checksum, :createdAt, :updatedAt
+             )'
+        );
+    }
+    return $pdo->prepare(
+        'INSERT IGNORE INTO trading_observations (
+           observation_key, lifecycle, end_at, market_probability, annualized_return, volume_usdc,
+           payload, payload_checksum, created_at, updated_at
+         ) VALUES (
+           :key, :lifecycle, :endAt, :probability, :annualizedReturn, :volume,
+           :payload, :checksum, :createdAt, :updatedAt
+         )'
+    );
 }
 
 function trading_storage_table_stats(PDO $pdo): array
@@ -1549,36 +1614,57 @@ function trading_storage_archive_listing(): array
  */
 function trading_storage_restore_observation_archives(PDO $pdo, int $limit = 250): array
 {
+    return trading_storage_restore_observation_archives_from_root(
+        $pdo,
+        'observation-archive',
+        'observation-archive',
+        $limit,
+    );
+}
+
+/**
+ * Restoring stale SCRAPED snapshots is intentionally a separate explicit action. They are
+ * retained as a recovery/archive source, but restoring them automatically would recreate the
+ * table growth this retention policy is meant to prevent.
+ */
+function trading_storage_restore_stale_scraped_observation_archives(PDO $pdo, int $limit = 250): array
+{
+    return trading_storage_restore_observation_archives_from_root(
+        $pdo,
+        'scraped-observation-archive',
+        'scraped-observation-archive',
+        $limit,
+    );
+}
+
+function trading_storage_restore_observation_archives_from_root(
+    PDO $pdo,
+    string $directory,
+    string $metaPrefix,
+    int $limit = 250,
+): array
+{
     trading_storage_bootstrap($pdo);
     $limit = max(1, min(500, $limit));
-    $root = __DIR__ . '/data/observation-archive';
+    $root = __DIR__ . '/data/' . trim($directory, '/');
     $files = glob($root . '/*/*.ndjson.gz') ?: [];
     sort($files, SORT_STRING);
     if ($files === []) {
         return ['scanned' => 0, 'restored' => 0, 'alreadyPresent' => 0, 'done' => true];
     }
-    if (trading_storage_meta_get('observation-archive-restored-at') !== null) {
+    if (trading_storage_meta_get($metaPrefix . '-restored-at') !== null) {
         return ['scanned' => 0, 'restored' => 0, 'alreadyPresent' => 0, 'done' => true];
     }
 
-    $cursor = json_decode((string) (trading_storage_meta_get('observation-archive-restore-cursor') ?? ''), true);
+    $cursor = json_decode((string) (trading_storage_meta_get($metaPrefix . '-restore-cursor') ?? ''), true);
     $fileIndex = is_array($cursor) ? max(0, (int) ($cursor['fileIndex'] ?? 0)) : 0;
     $lineOffset = is_array($cursor) ? max(0, (int) ($cursor['lineOffset'] ?? 0)) : 0;
     if ($fileIndex >= count($files)) {
         return ['scanned' => 0, 'restored' => 0, 'alreadyPresent' => 0, 'done' => true];
     }
 
-    $insert = $pdo->prepare(
-        'INSERT IGNORE INTO trading_observations (
-           observation_key, lifecycle, source_id, token_id, event_slug, market_slug, outcome_label, market_type,
-           end_at, observed_at, resolved_at, market_probability, net_yield, annualized_return, volume_usdc,
-           tags_json, payload, payload_checksum, created_at, updated_at
-         ) VALUES (
-           :key, :lifecycle, :sourceId, :tokenId, :eventSlug, :marketSlug, :outcome, :marketType,
-           :endAt, :observedAt, :resolvedAt, :probability, :netYield, :annualizedReturn, :volume,
-           :tags, :payload, :checksum, :createdAt, :updatedAt
-         )'
-    );
+    $lean = trading_storage_observations_use_lean_schema($pdo);
+    $insert = trading_storage_observation_insert_ignore_statement($pdo);
     $scanned = $restored = $alreadyPresent = 0;
     $done = true;
     for (; $fileIndex < count($files); $fileIndex++, $lineOffset = 0) {
@@ -1606,7 +1692,7 @@ function trading_storage_restore_observation_archives(PDO $pdo, int $limit = 250
                 $columns['lifecycle'] = $lifecycle;
                 $columns['createdAt'] = $updatedAt;
                 $columns['updatedAt'] = $updatedAt;
-                $insert->execute($columns);
+                $insert->execute(trading_storage_observation_statement_bindings($columns, $lean));
                 if ($insert->rowCount() > 0) {
                     $restored++;
                 } else {
@@ -1620,7 +1706,7 @@ function trading_storage_restore_observation_archives(PDO $pdo, int $limit = 250
         }
         gzclose($handle);
         if (!$done) {
-            trading_storage_meta_put('observation-archive-restore-cursor', json_encode([
+            trading_storage_meta_put($metaPrefix . '-restore-cursor', json_encode([
                 'fileIndex' => $fileIndex,
                 'lineOffset' => $lineNumber,
             ], JSON_UNESCAPED_SLASHES));
@@ -1628,8 +1714,8 @@ function trading_storage_restore_observation_archives(PDO $pdo, int $limit = 250
         }
     }
     if ($done) {
-        trading_storage_meta_put('observation-archive-restore-cursor', '');
-        trading_storage_meta_put('observation-archive-restored-at', gmdate('c'));
+        trading_storage_meta_put($metaPrefix . '-restore-cursor', '');
+        trading_storage_meta_put($metaPrefix . '-restored-at', gmdate('c'));
     }
     return compact('scanned', 'restored', 'alreadyPresent', 'done');
 }
@@ -1954,6 +2040,129 @@ function trading_storage_archive_resolved_observations(PDO $pdo, int $limit = 20
 }
 
 /**
+ * Retain only a small operational window of active snapshots in MySQL.
+ *
+ * A SCRAPED observation is not a settlement record. It is a point-in-time snapshot that is
+ * useful while a market is current; keeping every expired snapshot forever was the principal
+ * source of the table's growth. The current catalogue already applies a three-day freshness
+ * bound, so this archive keeps a deliberately wider seven-day recovery window. The original
+ * payload is written to a separate, restorable gzip archive and read back before deletion.
+ *
+ * It must not share the resolved archive directory: the settled-statistics fold streams that
+ * directory and must never mistake an un-settled snapshot for historical performance.
+ */
+function trading_storage_archive_stale_scraped_observations(PDO $pdo, int $limit = 2000, int $keepDays = 7): array
+{
+    trading_storage_bootstrap($pdo);
+    $limit = max(50, min(20000, $limit));
+    // The execution catalogue itself has a three-day freshness window. Seven days leaves two
+    // full scan cycles of recovery margin and makes a caller unable to accidentally archive
+    // a still-current market by sending keepDays=0.
+    $keepDays = max(7, min(90, $keepDays));
+    $root = __DIR__ . '/data/scraped-observation-archive';
+    if (!is_dir($root) && !@mkdir($root, 0775, true) && !is_dir($root)) {
+        throw new RuntimeException('Could not create the stale scraped observation archive directory.');
+    }
+
+    $statement = $pdo->prepare(
+        'SELECT observation_key, lifecycle, payload, updated_at
+         FROM trading_observations
+         WHERE lifecycle = :lifecycle
+           AND updated_at < (UTC_TIMESTAMP() - INTERVAL :keepDays DAY)
+         ORDER BY updated_at ASC
+         LIMIT ' . $limit
+    );
+    $statement->execute(['lifecycle' => 'SCRAPED', 'keepDays' => $keepDays]);
+    $rows = $statement->fetchAll();
+    if ($rows === []) {
+        return [
+            'keepDays' => $keepDays,
+            'archived' => 0,
+            'deleted' => 0,
+            'file' => null,
+            'done' => true,
+            'remaining' => 0,
+        ];
+    }
+
+    $bucket = substr((string) ($rows[0]['updated_at'] ?? gmdate('Y-m-d')), 0, 7);
+    if (!preg_match('/^\d{4}-\d{2}$/', $bucket)) {
+        $bucket = gmdate('Y-m');
+    }
+    $dir = $root . '/' . $bucket;
+    if (!is_dir($dir) && !@mkdir($dir, 0775, true) && !is_dir($dir)) {
+        throw new RuntimeException('Could not create the stale scraped archive bucket ' . $bucket);
+    }
+    $path = $dir . '/' . gmdate('Ymd-His') . '-' . substr(bin2hex(random_bytes(4)), 0, 8) . '.ndjson.gz';
+    $handle = gzopen($path, 'wb9');
+    if ($handle === false) {
+        throw new RuntimeException('Could not open the stale scraped archive file for writing.');
+    }
+
+    $keys = [];
+    $written = 0;
+    foreach ($rows as $row) {
+        $key = (string) ($row['observation_key'] ?? '');
+        $payload = trading_storage_unpack($row['payload'] ?? null);
+        if ($key === '' || !is_array($payload)) {
+            // A row the restore path cannot rebuild remains in MySQL. Retention must never
+            // turn a malformed payload into silent data loss.
+            continue;
+        }
+        $line = json_encode([
+            'observationKey' => $key,
+            'lifecycle' => 'SCRAPED',
+            'updatedAt' => (string) ($row['updated_at'] ?? ''),
+            'payload' => $payload,
+        ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        if (!is_string($line)) {
+            continue;
+        }
+        gzwrite($handle, $line . "\n");
+        $keys[] = $key;
+        $written++;
+    }
+    gzclose($handle);
+
+    $verified = trading_storage_count_archived_rows($path);
+    if ($verified !== $written) {
+        throw new RuntimeException(
+            'The stale scraped archive holds ' . $verified . ' of ' . $written . ' rows; nothing was deleted.'
+        );
+    }
+
+    $deleted = 0;
+    foreach (array_chunk($keys, 500) as $chunk) {
+        $delete = $pdo->prepare(
+            'DELETE FROM trading_observations
+             WHERE lifecycle = "SCRAPED" AND observation_key IN ('
+            . implode(', ', array_fill(0, count($chunk), '?')) . ')'
+        );
+        $delete->execute($chunk);
+        $deleted += $delete->rowCount();
+    }
+
+    $remainingStatement = $pdo->prepare(
+        'SELECT COUNT(*) FROM trading_observations
+         WHERE lifecycle = :lifecycle
+           AND updated_at < (UTC_TIMESTAMP() - INTERVAL :keepDays DAY)'
+    );
+    $remainingStatement->execute(['lifecycle' => 'SCRAPED', 'keepDays' => $keepDays]);
+    $remaining = (int) $remainingStatement->fetchColumn();
+
+    return [
+        'keepDays' => $keepDays,
+        'archived' => $written,
+        'verified' => $verified,
+        'deleted' => $deleted,
+        'file' => str_replace(__DIR__ . '/', '', $path),
+        'bytes' => (int) (@filesize($path) ?: 0),
+        'remaining' => $remaining,
+        'done' => count($rows) < $limit,
+    ];
+}
+
+/**
  * Every settled observation held in the archive files, one at a time.
  *
  * This is what makes deletion safe. The fold rebuilds the statistics from scratch on every
@@ -2177,6 +2386,90 @@ function trading_storage_rebuild_compacted_table(PDO $pdo, string $table): array
     // InnoDB rolls it back and the original table stands -- the work is lost, the data is not.
     $pdo->query('OPTIMIZE TABLE `' . $table . '`')->fetchAll();
     return trading_storage_table_stats($pdo);
+}
+
+/**
+ * The observation row originally projected identifiers, labels, tags and timestamps beside
+ * the complete compressed payload. They are all read from that payload; the SQL read path
+ * never filters or joins on them. Keeping this plan separate from the migration lets the
+ * maintenance workflow show exactly what will disappear before it asks MySQL to rebuild the
+ * table, which matters on a quota-limited host.
+ */
+function trading_storage_observation_schema_plan(PDO $pdo): array
+{
+    trading_storage_bootstrap($pdo);
+    $statement = $pdo->prepare(
+        'SELECT column_name, column_type, character_set_name
+         FROM information_schema.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = "trading_observations"
+         ORDER BY ordinal_position'
+    );
+    $statement->execute();
+    $columns = [];
+    foreach ($statement->fetchAll() as $row) {
+        $name = (string) ($row['column_name'] ?? '');
+        if ($name !== '') {
+            $columns[$name] = [
+                'type' => (string) ($row['column_type'] ?? ''),
+                'charset' => $row['character_set_name'] ?? null,
+            ];
+        }
+    }
+    $redundant = [
+        'source_id',
+        'token_id',
+        'event_slug',
+        'market_slug',
+        'outcome_label',
+        'market_type',
+        'observed_at',
+        'resolved_at',
+        'net_yield',
+        'tags_json',
+    ];
+    $present = array_values(array_filter($redundant, static fn (string $column): bool => isset($columns[$column])));
+    return [
+        'lean' => !isset($columns['source_id']),
+        'columns' => $columns,
+        'dropColumns' => $present,
+        'hashesUseAscii' => (($columns['observation_key']['charset'] ?? '') === 'ascii')
+            && (($columns['payload_checksum']['charset'] ?? '') === 'ascii'),
+        'table' => trading_storage_table_stats($pdo)['trading_observations'] ?? [],
+    ];
+}
+
+/**
+ * This is intentionally not called by bootstrap or an ordinary web request. ALTER TABLE
+ * rebuilds the largest table and needs temporary room, so the maintenance workflow runs a
+ * quota guard first and calls this only after stale snapshots have been archived.
+ */
+function trading_storage_slim_observations_schema(PDO $pdo): array
+{
+    $plan = trading_storage_observation_schema_plan($pdo);
+    if ($plan['lean']) {
+        return $plan + ['changed' => false];
+    }
+
+    $dropColumns = $plan['dropColumns'];
+    if ($dropColumns === []) {
+        throw new RuntimeException('The observation schema is neither legacy nor lean. Refusing to alter it.');
+    }
+    $operations = [
+        'MODIFY `observation_key` CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL',
+        'MODIFY `lifecycle` ENUM(\'SCRAPED\', \'RESOLVED\') NOT NULL',
+        'MODIFY `payload_checksum` CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL',
+    ];
+    foreach ($dropColumns as $column) {
+        $operations[] = 'DROP COLUMN `' . $column . '`';
+    }
+    $operations[] = 'ROW_FORMAT = DYNAMIC';
+    $pdo->exec('ALTER TABLE `trading_observations` ' . implode(', ', $operations));
+    trading_storage_forget_observation_schema($pdo);
+
+    return trading_storage_observation_schema_plan($pdo) + [
+        'changed' => true,
+        'removedColumns' => $dropColumns,
+    ];
 }
 
 function trading_storage_now(): string
@@ -2635,54 +2928,77 @@ function trading_storage_observations_upsert(array $items): int
         throw new RuntimeException('Trading MySQL storage is unavailable.');
     }
     trading_storage_bootstrap($pdo);
-    $statement = $pdo->prepare(
-        "INSERT INTO trading_observations (
-           observation_key, lifecycle, source_id, token_id, event_slug, market_slug, outcome_label, market_type,
-           end_at, observed_at, resolved_at, market_probability, net_yield, annualized_return, volume_usdc,
-           tags_json, payload, payload_checksum, created_at, updated_at
-         ) VALUES (
-           :key, :lifecycle, :sourceId, :tokenId, :eventSlug, :marketSlug, :outcome, :marketType,
-           :endAt, :observedAt, :resolvedAt, :probability, :netYield, :annualizedReturn, :volume,
-           :tags, :payload, :checksum, :createdAt, :updatedAt
-         ) ON DUPLICATE KEY UPDATE
-           /* A settlement is terminal. A later catalogue snapshot can be older or can
-              carry the default SCRAPED status, but it must never reopen the row or replace
-              the settled payload with that snapshot. */
-           source_id = IF(payload_checksum = VALUES(payload_checksum)
-               OR (lifecycle = 'RESOLVED' AND VALUES(lifecycle) <> 'RESOLVED'), source_id, VALUES(source_id)),
-           token_id = IF(payload_checksum = VALUES(payload_checksum)
-               OR (lifecycle = 'RESOLVED' AND VALUES(lifecycle) <> 'RESOLVED'), token_id, VALUES(token_id)),
-           event_slug = IF(payload_checksum = VALUES(payload_checksum)
-               OR (lifecycle = 'RESOLVED' AND VALUES(lifecycle) <> 'RESOLVED'), event_slug, VALUES(event_slug)),
-           market_slug = IF(payload_checksum = VALUES(payload_checksum)
-               OR (lifecycle = 'RESOLVED' AND VALUES(lifecycle) <> 'RESOLVED'), market_slug, VALUES(market_slug)),
-           outcome_label = IF(payload_checksum = VALUES(payload_checksum)
-               OR (lifecycle = 'RESOLVED' AND VALUES(lifecycle) <> 'RESOLVED'), outcome_label, VALUES(outcome_label)),
-           market_type = IF(payload_checksum = VALUES(payload_checksum)
-               OR (lifecycle = 'RESOLVED' AND VALUES(lifecycle) <> 'RESOLVED'), market_type, VALUES(market_type)),
-           end_at = IF(payload_checksum = VALUES(payload_checksum)
-               OR (lifecycle = 'RESOLVED' AND VALUES(lifecycle) <> 'RESOLVED'), end_at, VALUES(end_at)),
-           observed_at = IF(payload_checksum = VALUES(payload_checksum)
-               OR (lifecycle = 'RESOLVED' AND VALUES(lifecycle) <> 'RESOLVED'), observed_at, VALUES(observed_at)),
-           resolved_at = IF(payload_checksum = VALUES(payload_checksum)
-               OR (lifecycle = 'RESOLVED' AND VALUES(lifecycle) <> 'RESOLVED'), resolved_at, VALUES(resolved_at)),
-           market_probability = IF(payload_checksum = VALUES(payload_checksum)
-               OR (lifecycle = 'RESOLVED' AND VALUES(lifecycle) <> 'RESOLVED'), market_probability, VALUES(market_probability)),
-           net_yield = IF(payload_checksum = VALUES(payload_checksum)
-               OR (lifecycle = 'RESOLVED' AND VALUES(lifecycle) <> 'RESOLVED'), net_yield, VALUES(net_yield)),
-           annualized_return = IF(payload_checksum = VALUES(payload_checksum)
-               OR (lifecycle = 'RESOLVED' AND VALUES(lifecycle) <> 'RESOLVED'), annualized_return, VALUES(annualized_return)),
-           volume_usdc = IF(payload_checksum = VALUES(payload_checksum)
-               OR (lifecycle = 'RESOLVED' AND VALUES(lifecycle) <> 'RESOLVED'), volume_usdc, VALUES(volume_usdc)),
-           tags_json = IF(payload_checksum = VALUES(payload_checksum)
-               OR (lifecycle = 'RESOLVED' AND VALUES(lifecycle) <> 'RESOLVED'), tags_json, VALUES(tags_json)),
-           payload = IF(payload_checksum = VALUES(payload_checksum)
-               OR (lifecycle = 'RESOLVED' AND VALUES(lifecycle) <> 'RESOLVED'), payload, VALUES(payload)),
-           updated_at = IF(payload_checksum = VALUES(payload_checksum)
-               OR (lifecycle = 'RESOLVED' AND VALUES(lifecycle) <> 'RESOLVED'), updated_at, VALUES(updated_at)),
-           payload_checksum = IF(payload_checksum = VALUES(payload_checksum)
-               OR (lifecycle = 'RESOLVED' AND VALUES(lifecycle) <> 'RESOLVED'), payload_checksum, VALUES(payload_checksum)),
-           lifecycle = IF(lifecycle = 'RESOLVED' OR VALUES(lifecycle) = 'RESOLVED', 'RESOLVED', VALUES(lifecycle))"
+    $lean = trading_storage_observations_use_lean_schema($pdo);
+    $statement = $pdo->prepare($lean
+        ? "INSERT INTO trading_observations (
+               observation_key, lifecycle, end_at, market_probability, annualized_return, volume_usdc,
+               payload, payload_checksum, created_at, updated_at
+             ) VALUES (
+               :key, :lifecycle, :endAt, :probability, :annualizedReturn, :volume,
+               :payload, :checksum, :createdAt, :updatedAt
+             ) ON DUPLICATE KEY UPDATE
+               /* A settlement is terminal. A later catalogue snapshot can be older or can
+                  carry the default SCRAPED status, but it must never reopen the row or replace
+                  the settled payload with that snapshot. */
+               end_at = IF(payload_checksum = VALUES(payload_checksum)
+                   OR (lifecycle = 'RESOLVED' AND VALUES(lifecycle) <> 'RESOLVED'), end_at, VALUES(end_at)),
+               market_probability = IF(payload_checksum = VALUES(payload_checksum)
+                   OR (lifecycle = 'RESOLVED' AND VALUES(lifecycle) <> 'RESOLVED'), market_probability, VALUES(market_probability)),
+               annualized_return = IF(payload_checksum = VALUES(payload_checksum)
+                   OR (lifecycle = 'RESOLVED' AND VALUES(lifecycle) <> 'RESOLVED'), annualized_return, VALUES(annualized_return)),
+               volume_usdc = IF(payload_checksum = VALUES(payload_checksum)
+                   OR (lifecycle = 'RESOLVED' AND VALUES(lifecycle) <> 'RESOLVED'), volume_usdc, VALUES(volume_usdc)),
+               payload = IF(payload_checksum = VALUES(payload_checksum)
+                   OR (lifecycle = 'RESOLVED' AND VALUES(lifecycle) <> 'RESOLVED'), payload, VALUES(payload)),
+               updated_at = IF(payload_checksum = VALUES(payload_checksum)
+                   OR (lifecycle = 'RESOLVED' AND VALUES(lifecycle) <> 'RESOLVED'), updated_at, VALUES(updated_at)),
+               payload_checksum = IF(payload_checksum = VALUES(payload_checksum)
+                   OR (lifecycle = 'RESOLVED' AND VALUES(lifecycle) <> 'RESOLVED'), payload_checksum, VALUES(payload_checksum)),
+               lifecycle = IF(lifecycle = 'RESOLVED' OR VALUES(lifecycle) = 'RESOLVED', 'RESOLVED', VALUES(lifecycle))"
+        : "INSERT INTO trading_observations (
+               observation_key, lifecycle, source_id, token_id, event_slug, market_slug, outcome_label, market_type,
+               end_at, observed_at, resolved_at, market_probability, net_yield, annualized_return, volume_usdc,
+               tags_json, payload, payload_checksum, created_at, updated_at
+             ) VALUES (
+               :key, :lifecycle, :sourceId, :tokenId, :eventSlug, :marketSlug, :outcome, :marketType,
+               :endAt, :observedAt, :resolvedAt, :probability, :netYield, :annualizedReturn, :volume,
+               :tags, :payload, :checksum, :createdAt, :updatedAt
+             ) ON DUPLICATE KEY UPDATE
+               source_id = IF(payload_checksum = VALUES(payload_checksum)
+                   OR (lifecycle = 'RESOLVED' AND VALUES(lifecycle) <> 'RESOLVED'), source_id, VALUES(source_id)),
+               token_id = IF(payload_checksum = VALUES(payload_checksum)
+                   OR (lifecycle = 'RESOLVED' AND VALUES(lifecycle) <> 'RESOLVED'), token_id, VALUES(token_id)),
+               event_slug = IF(payload_checksum = VALUES(payload_checksum)
+                   OR (lifecycle = 'RESOLVED' AND VALUES(lifecycle) <> 'RESOLVED'), event_slug, VALUES(event_slug)),
+               market_slug = IF(payload_checksum = VALUES(payload_checksum)
+                   OR (lifecycle = 'RESOLVED' AND VALUES(lifecycle) <> 'RESOLVED'), market_slug, VALUES(market_slug)),
+               outcome_label = IF(payload_checksum = VALUES(payload_checksum)
+                   OR (lifecycle = 'RESOLVED' AND VALUES(lifecycle) <> 'RESOLVED'), outcome_label, VALUES(outcome_label)),
+               market_type = IF(payload_checksum = VALUES(payload_checksum)
+                   OR (lifecycle = 'RESOLVED' AND VALUES(lifecycle) <> 'RESOLVED'), market_type, VALUES(market_type)),
+               end_at = IF(payload_checksum = VALUES(payload_checksum)
+                   OR (lifecycle = 'RESOLVED' AND VALUES(lifecycle) <> 'RESOLVED'), end_at, VALUES(end_at)),
+               observed_at = IF(payload_checksum = VALUES(payload_checksum)
+                   OR (lifecycle = 'RESOLVED' AND VALUES(lifecycle) <> 'RESOLVED'), observed_at, VALUES(observed_at)),
+               resolved_at = IF(payload_checksum = VALUES(payload_checksum)
+                   OR (lifecycle = 'RESOLVED' AND VALUES(lifecycle) <> 'RESOLVED'), resolved_at, VALUES(resolved_at)),
+               market_probability = IF(payload_checksum = VALUES(payload_checksum)
+                   OR (lifecycle = 'RESOLVED' AND VALUES(lifecycle) <> 'RESOLVED'), market_probability, VALUES(market_probability)),
+               net_yield = IF(payload_checksum = VALUES(payload_checksum)
+                   OR (lifecycle = 'RESOLVED' AND VALUES(lifecycle) <> 'RESOLVED'), net_yield, VALUES(net_yield)),
+               annualized_return = IF(payload_checksum = VALUES(payload_checksum)
+                   OR (lifecycle = 'RESOLVED' AND VALUES(lifecycle) <> 'RESOLVED'), annualized_return, VALUES(annualized_return)),
+               volume_usdc = IF(payload_checksum = VALUES(payload_checksum)
+                   OR (lifecycle = 'RESOLVED' AND VALUES(lifecycle) <> 'RESOLVED'), volume_usdc, VALUES(volume_usdc)),
+               tags_json = IF(payload_checksum = VALUES(payload_checksum)
+                   OR (lifecycle = 'RESOLVED' AND VALUES(lifecycle) <> 'RESOLVED'), tags_json, VALUES(tags_json)),
+               payload = IF(payload_checksum = VALUES(payload_checksum)
+                   OR (lifecycle = 'RESOLVED' AND VALUES(lifecycle) <> 'RESOLVED'), payload, VALUES(payload)),
+               updated_at = IF(payload_checksum = VALUES(payload_checksum)
+                   OR (lifecycle = 'RESOLVED' AND VALUES(lifecycle) <> 'RESOLVED'), updated_at, VALUES(updated_at)),
+               payload_checksum = IF(payload_checksum = VALUES(payload_checksum)
+                   OR (lifecycle = 'RESOLVED' AND VALUES(lifecycle) <> 'RESOLVED'), payload_checksum, VALUES(payload_checksum)),
+               lifecycle = IF(lifecycle = 'RESOLVED' OR VALUES(lifecycle) = 'RESOLVED', 'RESOLVED', VALUES(lifecycle))"
     );
     $count = 0;
     $pdo->beginTransaction();
@@ -2691,7 +3007,10 @@ function trading_storage_observations_upsert(array $items): int
             if (!is_array($item)) {
                 continue;
             }
-            $statement->execute(trading_storage_observation_columns($item));
+            $statement->execute(trading_storage_observation_statement_bindings(
+                trading_storage_observation_columns($item),
+                $lean,
+            ));
             $count += 1;
         }
         $pdo->commit();

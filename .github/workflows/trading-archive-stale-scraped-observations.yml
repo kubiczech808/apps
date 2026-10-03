@@ -1,0 +1,125 @@
+name: Archive Stale Scraped Trading Observations
+
+# The active catalogue is a short-lived working set. Keeping every old SCRAPED snapshot in
+# MySQL made trading_observations grow without bound, although neither the dashboard nor the
+# executor reads rows older than the three-day freshness window. This job retains seven days,
+# writes anything older to a separate restorable gzip archive, verifies it, and only then
+# deletes the database rows.
+
+on:
+  schedule:
+    # Offset from the settled-observation archive at :00/:30, so the two filesystem writers
+    # do not make the hosting decompress and compress separate archives at the same moment.
+    - cron: "17,47 * * * *"
+  workflow_dispatch:
+    inputs:
+      batches:
+        description: "How many verified archive batches to run"
+        required: false
+        default: "8"
+      limit:
+        description: "Rows per batch"
+        required: false
+        default: "2000"
+      keep_days:
+        description: "Retain at least this many days of active snapshots (minimum is 7)"
+        required: false
+        default: "7"
+
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    concurrency:
+      group: trading-archive-stale-scraped-observations
+      cancel-in-progress: false
+    steps:
+      - name: Archive stale SCRAPED observations, verifying every batch
+        env:
+          TRADING_TRIGGER_KEY: ${{ secrets.POLYTRADING_DB_PASSWORD }}
+          BATCHES: ${{ github.event.inputs.batches || '8' }}
+          LIMIT: ${{ github.event.inputs.limit || '2000' }}
+          KEEP_DAYS: ${{ github.event.inputs.keep_days || '7' }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+
+          key = os.environ["TRADING_TRIGGER_KEY"]
+          url = "https://www.osobnizkusenosti.cz/trading/api.php?action=storage-admin"
+          batches = max(1, min(40, int(os.environ.get("BATCHES") or 8)))
+          limit = max(50, min(20000, int(os.environ.get("LIMIT") or 2000)))
+          keep_days = max(7, min(90, int(os.environ.get("KEEP_DAYS") or 7)))
+
+          def call(payload, timeout=900):
+              request = urllib.request.Request(
+                  url,
+                  data=json.dumps(payload).encode("utf-8"),
+                  method="POST",
+                  headers={"Content-Type": "application/json", "X-Trading-Trigger-Key": key},
+              )
+              try:
+                  with urllib.request.urlopen(request, timeout=timeout) as response:
+                      body = json.loads(response.read().decode("utf-8"))
+              except urllib.error.HTTPError as error:
+                  raise SystemExit(
+                      f"HTTP {error.code} from {payload.get('operation')}: "
+                      f"{error.read().decode('utf-8', 'replace')[:600]}"
+                  ) from error
+              if not body.get("ok"):
+                  raise SystemExit(str(body.get("error") or f"{payload.get('operation')} failed"))
+              return body
+
+          def footprint():
+              status = call({"operation": "status"}, timeout=180)
+              storage = status.get("storage") or {}
+              tables = storage.get("tradingTables") or {}
+              observation = tables.get("trading_observations") or {}
+              return {
+                  "databaseMB": round((storage.get("databaseSizeBytes") or 0) / 1048576, 1),
+                  "observationsMB": round(
+                      ((observation.get("dataBytes") or 0) + (observation.get("indexBytes") or 0)) / 1048576, 1
+                  ),
+                  "counts": status.get("counts") or {},
+              }
+
+          before = footprint()
+          print("Before:", json.dumps(before))
+          archived = verified = deleted = 0
+          done = False
+          for index in range(batches):
+              response = call({
+                  "operation": "archive-stale-scraped-observations",
+                  "limit": limit,
+                  "keepDays": keep_days,
+              })
+              batch = response.get("batch") or {}
+              batch_archived = int(batch.get("archived") or 0)
+              batch_verified = int(batch.get("verified") or 0)
+              batch_deleted = int(batch.get("deleted") or 0)
+              archived += batch_archived
+              verified += batch_verified
+              deleted += batch_deleted
+              print(
+                  f"batch {index + 1}: archived {batch_archived}, verified {batch_verified}, "
+                  f"deleted {batch_deleted}, remaining {batch.get('remaining')}, "
+                  f"{(batch.get('bytes') or 0) / 1048576:.1f} MB -> {batch.get('file')}"
+              )
+              # The archive is the only reason deletion is permitted. Equality (not merely
+              # <=) catches both a dangerous extra delete and a misleading partial delete.
+              if batch_deleted != batch_verified or batch_archived != batch_verified:
+                  raise SystemExit("STOP: an archive batch was not verified one-for-one before deletion.")
+              if batch.get("done"):
+                  done = True
+                  break
+
+          after = footprint()
+          print(f"archived {archived}, verified {verified}, deleted {deleted}, done={done}")
+          print("After:", json.dumps(after))
+          print(
+              "Rows are now reusable InnoDB space. The charged table size falls after the "
+              "separate, quota-checked schema rebuild; this job never risks that rebuild automatically."
+          )
+          PY

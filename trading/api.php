@@ -8175,6 +8175,13 @@ try {
             );
             respond(['ok' => true, 'operation' => 'restore-observation-archives', 'result' => $result]);
         }
+        if ($operation === 'restore-stale-scraped-observation-archives') {
+            $result = trading_storage_restore_stale_scraped_observation_archives(
+                $pdo,
+                (int) ($storageRequest['limit'] ?? 250),
+            );
+            respond(['ok' => true, 'operation' => 'restore-stale-scraped-observation-archives', 'result' => $result]);
+        }
         // Read-only, and added the day the paper histories were lost. Every paper portfolio's
         // trades now start within four seconds of 2026-09-12T08:54Z, the published segment
         // files were overwritten with that same state, and the mirror is the only place a
@@ -8658,6 +8665,20 @@ try {
             );
             respond(['ok' => true, 'operation' => 'archive-resolved-observations', 'batch' => $result]);
         }
+        // Old SCRAPED rows are snapshots, not settlements. Keep the operational seven-day
+        // window in MySQL and move older snapshots to their own restorable archive. The
+        // separate directory is important: the resolved-statistics fold reads only the
+        // settled archive, and a stale active snapshot must never enter those totals.
+        if ($operation === 'archive-stale-scraped-observations') {
+            @set_time_limit(0);
+            @ignore_user_abort(true);
+            $result = trading_storage_archive_stale_scraped_observations(
+                $pdo,
+                (int) ($storageRequest['limit'] ?? 2000),
+                (int) ($storageRequest['keepDays'] ?? 7),
+            );
+            respond(['ok' => true, 'operation' => 'archive-stale-scraped-observations', 'batch' => $result]);
+        }
         // Read-only. What an observation row is made of, field by field, and what it
         // would weigh holding only what anything reads. See
         // trading_storage_observation_payload_anatomy.
@@ -8702,6 +8723,28 @@ try {
                 'operation' => 'schema-footprint',
                 'footprint' => trading_storage_schema_footprint($pdo),
             ]);
+        }
+        if ($operation === 'observation-schema-plan') {
+            respond([
+                'ok' => true,
+                'operation' => 'observation-schema-plan',
+                'plan' => trading_storage_observation_schema_plan($pdo),
+            ]);
+        }
+        // This executes ALTER TABLE on the largest table. It is deliberately impossible to
+        // trigger by merely selecting the operation: the maintenance workflow must pass this
+        // exact confirmation after checking the hosting quota and archived row count.
+        if ($operation === 'slim-observations-schema') {
+            if ((string) ($storageRequest['confirm'] ?? '') !== 'REBUILD_LEAN_OBSERVATIONS') {
+                respond([
+                    'ok' => false,
+                    'error' => 'confirm must be REBUILD_LEAN_OBSERVATIONS.',
+                ], 400);
+            }
+            @set_time_limit(0);
+            @ignore_user_abort(true);
+            $result = trading_storage_slim_observations_schema($pdo);
+            respond(['ok' => true, 'operation' => 'slim-observations-schema', 'result' => $result]);
         }
         if ($operation === 'status') {
             respond([

@@ -217,6 +217,10 @@ jobs:
                   # Observation snapshots previously moved out of MySQL. Keep them until
                   # the one-time recovery has restored every row into the database.
                   "observation-archive",
+                  # Old active-market snapshots are archived independently. They are not a
+                  # settled-statistics source, but remain recoverable and must survive deploy
+                  # cleanup for the same reason as the settled observation archive above.
+                  "scraped-observation-archive",
                   # Run-log archives predate the observation-retention mistake and are
                   # also runtime history rather than deploy artifacts.
                   "event-archive",

@@ -1,0 +1,93 @@
+name: Slim Trading Observation Storage Schema
+
+# Manual by design. This ALTER TABLE rebuilds trading_observations while keeping all payloads,
+# but needs a second compact copy of the table during the operation. The guard measures that
+# copy and refuses unless the shared hosting quota has enough headroom.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_slim:
+        description: "Rebuild the lean observation schema after the quota check."
+        required: true
+        type: boolean
+        default: false
+      hosting_used_mb:
+        description: "Current total usage of every database on the hosting panel."
+        required: true
+        type: string
+        # Deliberately refuses by default. A stale optimistic panel value is worse than a
+        # cancelled maintenance run on a shared quota.
+        default: "2000"
+      hosting_quota_mb:
+        description: "Hosting database quota in MB."
+        required: true
+        type: string
+        default: "2000"
+
+jobs:
+  slim:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    concurrency:
+      group: trading-storage-observations-schema
+      cancel-in-progress: false
+    env:
+      TRADING_TRIGGER_KEY: ${{ secrets.POLYTRADING_DB_PASSWORD }}
+      STORAGE_URL: https://www.osobnizkusenosti.cz/trading/api.php?action=storage-admin
+      HOSTING_USED_MB: ${{ inputs.hosting_used_mb }}
+      HOSTING_QUOTA_MB: ${{ inputs.hosting_quota_mb }}
+      TABLE: trading_observations
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show the exact schema reduction plan
+        run: |
+          python3 - <<'PY'
+          import json, os, urllib.request
+
+          request = urllib.request.Request(
+              os.environ["STORAGE_URL"],
+              data=json.dumps({"operation": "observation-schema-plan"}).encode("utf-8"),
+              method="POST",
+              headers={"Content-Type": "application/json", "X-Trading-Trigger-Key": os.environ["TRADING_TRIGGER_KEY"]},
+          )
+          with urllib.request.urlopen(request, timeout=180) as response:
+              payload = json.loads(response.read().decode("utf-8"))
+          if not payload.get("ok"):
+              raise SystemExit(payload.get("error") or "could not read the schema plan")
+          plan = payload.get("plan") or {}
+          print("lean already:", plan.get("lean"))
+          print("columns to remove:", ", ".join(plan.get("dropColumns") or []) or "none")
+          print("hashes use ASCII:", plan.get("hashesUseAscii"))
+          print("current table:", json.dumps(plan.get("table") or {}))
+          PY
+
+      - name: Check that the shared quota can hold the compact replacement
+        if: inputs.confirm_slim == true
+        run: python3 trading/tools/rebuild-guard.py
+
+      - name: Rebuild the lean observation schema
+        if: inputs.confirm_slim == true
+        run: |
+          python3 - <<'PY'
+          import json, os, urllib.request
+
+          request = urllib.request.Request(
+              os.environ["STORAGE_URL"],
+              data=json.dumps({
+                  "operation": "slim-observations-schema",
+                  "confirm": "REBUILD_LEAN_OBSERVATIONS",
+              }).encode("utf-8"),
+              method="POST",
+              headers={"Content-Type": "application/json", "X-Trading-Trigger-Key": os.environ["TRADING_TRIGGER_KEY"]},
+          )
+          with urllib.request.urlopen(request, timeout=1800) as response:
+              payload = json.loads(response.read().decode("utf-8"))
+          if not payload.get("ok"):
+              raise SystemExit(payload.get("error") or "schema rebuild failed")
+          result = payload.get("result") or {}
+          print("changed:", result.get("changed"))
+          print("removed:", ", ".join(result.get("removedColumns") or []))
+          print("table:", json.dumps(result.get("table") or {}))
+          PY
