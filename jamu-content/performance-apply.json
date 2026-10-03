@@ -1,0 +1,57 @@
+{
+  "schema": 1,
+  "apply": {
+    "ok": true,
+    "page_cache": {
+      "enabled": true,
+      "ttl_hours": 12,
+      "preload_enabled": false,
+      "dynamic_route_count": 12
+    },
+    "currency_cache_cookie": true,
+    "browser_cache": {
+      "configured": true,
+      "enabled": true,
+      "error": ""
+    }
+  },
+  "verification": {
+    "ok": true,
+    "public_product": {
+      "first_status": 200,
+      "first_seconds": 4.998,
+      "second_status": 200,
+      "second_seconds": 0.729,
+      "cache_speedup_observed": true
+    },
+    "currency_variants": {
+      "eur": {
+        "status": 200,
+        "seconds": 0.736,
+        "currency_symbols": [
+          "{\"@context\":\"https://schema.org/\",\"@graph\":[{\"@context\":\"https://schema.org/\",\"@type\":\"BreadcrumbList\",\"itemListElement\":[{\"@type\":\"ListItem\",\"position\":1,\"item\":{\"name\":\"Home\",\"@id\":\"https://tajemstvijamu.cz\"}},{\"@type\":\"ListItem\",\"position\":2,\"item\":{\"name\":\"Products\",\"@id\":\"https://tajemstvijamu.cz/en/product-category/products/\"}},{\"@type\":\"ListItem\",\"position\":3,\"item\":{\"name\":\"Sanga Sanga Classic Herbal Body Oil\",\"@id\":\"https://tajemstvijamu.cz/en/product/herbal-therapeutic-oil-sanga-sanga-classic/\"}}]},{\"@context\":\"https://schema.org/\",\"@type\":\"Product\",\"@id\":\"https://tajemstvijamu.cz/en/product/herbal-therapeutic-oil-sanga-sanga-classic/#product\",\"name\":\"Sanga Sanga Classic Herbal Body Oil\",\"url\":\"https://tajemstvijamu.cz/en/product/herbal-therapeutic-oil-sanga-sanga-classic/\",\"description\":\"Warming effect \\u00b7 Releases tension \\u00b7 Traditional Balinese recipe \\u00b7 A ritual for body and mindPlease note: formerly Kutus Kutus, now Sanga Sanga \\u2014 the same herbal oil in a new form.\",\"image\":\"https://tajemstvijamu.cz/wp-content/uploads/2026/09/Sanga_Sanga_pruhledne.webp\",\"sku\":4558,\"offers\":[{\"@type\":\"Offer\",\"priceSpecification\":[{\"@type\":\"UnitPriceSpecification\",\"price\":\"35.00\",\"priceCurrency\":\"EUR\",\"validThrough\":\"2027-12-31\",\"valueAddedTaxIncluded\":true}],\"priceValidUntil\":\"2027-12-31\",\"availability\":\"https://schema.org/InStock\",\"url\":\"https://tajemstvijamu.cz/en/product/herbal-therapeutic-oil-sanga-sanga-classic/\",\"seller\":{\"@type\":\"Organization\",\"name\":\"Tajemstv\\u00ed JAMU\",\"url\":\"https://tajemstvijamu.cz\"},\"price\":\"35.00\",\"priceCurrency\":\"EUR\"}]}]}jQuery(document).ready(function($) {\r\n    // Zkontrolujeme, zda formulář pokladny existuje a zda pole už náhodou nejsou vykreslená\r\n    if ($('form.checkout').length > 0 && $('#wc_doprava_balikovna_id').length === 0) {\r\n        \r\n        // Vytvoříme skryté pole pro ID pobočky\r\n        $('').attr({\r\n            type: 'hidden',\r\n            id: 'wc_doprava_balikovna_id',\r\n            name: 'wc_doprava_balikovna_id'\r\n        }).appendTo('form.checkout');\r\n\r\n        // Vytvoříme skryté pole pro název/adresu pobočky\r\n        $('').attr({\r\n            type: 'hidden',\r\n            id: 'wc_doprava_balikovna_name',\r\n            name: 'wc_doprava_balikovna_name'\r\n        }).appendTo('form.checkout');\r\n        \r\n        console.log('Opravná pole pro Balíkovnu úspěšně doplněna.');\r\n    }\r\n});",
+          "€"
+        ]
+      },
+      "pln": {
+        "status": 200,
+        "seconds": 4.709,
+        "currency_symbols": [
+          "zł",
+          "{\"@context\":\"https://schema.org/\",\"@graph\":[{\"@context\":\"https://schema.org/\",\"@type\":\"BreadcrumbList\",\"itemListElement\":[{\"@type\":\"ListItem\",\"position\":1,\"item\":{\"name\":\"Home\",\"@id\":\"https://tajemstvijamu.cz\"}},{\"@type\":\"ListItem\",\"position\":2,\"item\":{\"name\":\"Health and Beauty\",\"@id\":\"https://tajemstvijamu.cz/en/product-category/health-and-beauty/\"}},{\"@type\":\"ListItem\",\"position\":3,\"item\":{\"name\":\"Sanga Sanga Classic Herbal Body Oil\",\"@id\":\"https://tajemstvijamu.cz/en/product/herbal-therapeutic-oil-sanga-sanga-classic/\"}}]},{\"@context\":\"https://schema.org/\",\"@type\":\"Product\",\"@id\":\"https://tajemstvijamu.cz/en/product/herbal-therapeutic-oil-sanga-sanga-classic/#product\",\"name\":\"Sanga Sanga Classic Herbal Body Oil\",\"url\":\"https://tajemstvijamu.cz/en/product/herbal-therapeutic-oil-sanga-sanga-classic/\",\"description\":\"Warming effect \\u00b7 Releases tension \\u00b7 Traditional Balinese recipe \\u00b7 A ritual for body and mindPlease note: formerly Kutus Kutus, now Sanga Sanga \\u2014 the same herbal oil in a new form.\",\"image\":\"https://tajemstvijamu.cz/wp-content/uploads/2026/09/Sanga_Sanga_pruhledne.webp\",\"sku\":4558,\"offers\":[{\"@type\":\"Offer\",\"priceSpecification\":[{\"@type\":\"UnitPriceSpecification\",\"price\":\"152.00\",\"priceCurrency\":\"PLN\",\"validThrough\":\"2027-12-31\",\"valueAddedTaxIncluded\":true}],\"priceValidUntil\":\"2027-12-31\",\"availability\":\"https://schema.org/InStock\",\"url\":\"https://tajemstvijamu.cz/en/product/herbal-therapeutic-oil-sanga-sanga-classic/\",\"seller\":{\"@type\":\"Organization\",\"name\":\"Tajemstv\\u00ed JAMU\",\"url\":\"https://tajemstvijamu.cz\"},\"price\":\"152.00\",\"priceCurrency\":\"PLN\"}]}]}jQuery(document).ready(function($) {\r\n    // Zkontrolujeme, zda formulář pokladny existuje a zda pole už náhodou nejsou vykreslená\r\n    if ($('form.checkout').length > 0 && $('#wc_doprava_balikovna_id').length === 0) {\r\n        \r\n        // Vytvoříme skryté pole pro ID pobočky\r\n        $('').attr({\r\n            type: 'hidden',\r\n            id: 'wc_doprava_balikovna_id',\r\n            name: 'wc_doprava_balikovna_id'\r\n        }).appendTo('form.checkout');\r\n\r\n        // Vytvoříme skryté pole pro název/adresu pobočky\r\n        $('').attr({\r\n            type: 'hidden',\r\n            id: 'wc_doprava_balikovna_name',\r\n            name: 'wc_doprava_balikovna_name'\r\n        }).appendTo('form.checkout');\r\n        \r\n        console.log('Opravná pole pro Balíkovnu úspěšně doplněna.');\r\n    }\r\n});"
+        ]
+      }
+    },
+    "currency_isolated": true,
+    "cart": {
+      "status": 200,
+      "seconds": 5.548,
+      "explicitly_not_cached": true
+    },
+    "stylesheet_cache_headers": {
+      "status": "200",
+      "cache_control": "public, max-age=2419200",
+      "expires": "Sat, 31 Oct 2026 18:00:05 GMT"
+    }
+  }
+}
