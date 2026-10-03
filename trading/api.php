@@ -8828,6 +8828,29 @@ try {
                 'density' => trading_storage_row_density($pdo),
             ]);
         }
+        // The remote verifier owns settlement proof. It receives only a market-specific slug
+        // or token, never an event slug, so sibling props cannot be graded as one another.
+        if ($operation === 'resolution-candidates') {
+            respond([
+                'ok' => true,
+                'operation' => 'resolution-candidates',
+                'queue' => trading_storage_resolution_candidates(
+                    $pdo,
+                    (int) ($storageRequest['limit'] ?? 250),
+                    (int) ($storageRequest['olderThanDays'] ?? 7),
+                ),
+            ]);
+        }
+        if ($operation === 'apply-remote-resolutions') {
+            if (!is_array($storageRequest['patches'] ?? null)) {
+                respond(['ok' => false, 'error' => 'patches must be an array.'], 400);
+            }
+            respond([
+                'ok' => true,
+                'operation' => 'apply-remote-resolutions',
+                'result' => trading_storage_apply_remote_resolutions($pdo, $storageRequest['patches']),
+            ]);
+        }
         // A mirror may persist the terminal Gamma payload immediately before its lifecycle
         // write is interrupted. Reconcile only rows that already prove their own settlement;
         // end dates and a 0/1-looking live quote are deliberately not enough evidence.
@@ -8959,6 +8982,48 @@ try {
                 'ok' => true,
                 'operation' => 'observation-schema-plan',
                 'plan' => trading_storage_observation_schema_plan($pdo),
+            ]);
+        }
+        // The payload-free migration is copy/verify/swap. It never alters the source table
+        // in place, and new ingests are mirrored into the compact shadow while it is copied.
+        if ($operation === 'compact-observations-prepare') {
+            @set_time_limit(0);
+            respond([
+                'ok' => true,
+                'operation' => 'compact-observations-prepare',
+                'result' => trading_storage_compact_observation_migration_prepare($pdo),
+            ]);
+        }
+        if ($operation === 'compact-observations-copy') {
+            @set_time_limit(0);
+            @ignore_user_abort(true);
+            respond([
+                'ok' => true,
+                'operation' => 'compact-observations-copy',
+                'batch' => trading_storage_compact_observations_copy_batch(
+                    $pdo,
+                    (string) ($storageRequest['after'] ?? ''),
+                    (int) ($storageRequest['limit'] ?? 500),
+                ),
+            ]);
+        }
+        if ($operation === 'compact-observations-verify') {
+            respond([
+                'ok' => true,
+                'operation' => 'compact-observations-verify',
+                'verification' => trading_storage_compact_observations_migration_verify($pdo),
+            ]);
+        }
+        if ($operation === 'compact-observations-activate') {
+            if ((string) ($storageRequest['confirm'] ?? '') !== 'ACTIVATE_PAYLOADLESS_OBSERVATIONS') {
+                respond(['ok' => false, 'error' => 'confirm must be ACTIVATE_PAYLOADLESS_OBSERVATIONS.'], 400);
+            }
+            @set_time_limit(0);
+            @ignore_user_abort(true);
+            respond([
+                'ok' => true,
+                'operation' => 'compact-observations-activate',
+                'result' => trading_storage_compact_observations_activate($pdo),
             ]);
         }
         // This executes ALTER TABLE on the largest table. It is deliberately impossible to

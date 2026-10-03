@@ -5,8 +5,9 @@ declare(strict_types=1);
 /*
  * MySQL persistence for Trading. The public API keeps the current object-shaped
  * payloads, while this layer owns transactions, documents and queryable market rows.
- * JSON is retained only as payload data for fields that are not queried yet; it is not
- * a file and does not require decoding the whole catalogue to filter or page it.
+ * Observation rows retain only the queryable facts that application rules need. The original
+ * scan payload is not stored: it is the dominant storage cost and contains no historic fact
+ * beyond the projected fields below.
  */
 
 function trading_storage_is_configured(): bool
@@ -111,29 +112,7 @@ function trading_storage_bootstrap(PDO $pdo): void
         ) ENGINE=InnoDB ROW_FORMAT=DYNAMIC DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
     );
     $pdo->exec(
-        'CREATE TABLE IF NOT EXISTS trading_observations (
-            observation_key CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL PRIMARY KEY,
-            lifecycle ENUM(\'SCRAPED\', \'RESOLVED\') NOT NULL,
-            -- This is deliberately the one retained identifier outside the compressed payload.
-            -- It joins a snapshot to a real position in trading_trades, which lets retention
-            -- preserve every market the account actually traded without keeping source ids or
-            -- presentation-only projections forever.
-            token_id VARCHAR(191) CHARACTER SET ascii COLLATE ascii_bin NULL,
-            end_at DATETIME NULL,
-            market_probability DECIMAL(12,9) NULL,
-            annualized_return DECIMAL(24,9) NULL,
-            volume_usdc DECIMAL(24,6) NULL,
-            payload MEDIUMBLOB NOT NULL,
-            payload_checksum CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
-            created_at DATETIME(6) NOT NULL,
-            updated_at DATETIME(6) NOT NULL,
-            KEY trading_observations_lifecycle_end (lifecycle, end_at),
-            -- The shape a portfolio actually asks in: the current catalogue, inside a
-            -- probability band, resolving before a horizon. Without it every portfolio scan
-            -- reads the whole lifecycle and filters afterwards, which is the cost that made
-            -- serving reads from here collapse the host.
-            KEY trading_observations_scope (lifecycle, updated_at, market_probability, end_at)
-        ) ENGINE=InnoDB ROW_FORMAT=DYNAMIC DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
+        trading_storage_compact_observations_ddl('trading_observations')
     );
     $pdo->exec(
         'CREATE TABLE IF NOT EXISTS trading_event_log (
@@ -586,28 +565,104 @@ function trading_storage_optimize_schema(PDO $pdo): void
 }
 
 /**
- * The first version of trading_observations mirrored every field that was also inside the
- * compressed payload. The sole exception is token_id: it is the compact identity that joins
- * an observation to a real trade during retention. The execution scope itself needs only the
- * lifecycle, freshness, probability, horizon, volume and potential return. A newly-created
- * table therefore uses that lean projection. Existing installations remain readable and
- * writable until their deliberate, space-checked schema migration completes.
+ * The operational observation record intentionally stores a projection, not the original
+ * Gamma response. The latter is both reproducible from a token/slug and was responsible for
+ * almost all of the database footprint. These columns are the durable facts our rules,
+ * statistics and settlement accounting need after a scrape has passed.
  */
-function trading_storage_observations_use_lean_schema(PDO $pdo): bool
+function trading_storage_compact_observations_ddl(string $table): string
+{
+    if (!preg_match('/^[A-Za-z0-9_]+$/', $table)) {
+        throw new InvalidArgumentException('Invalid compact observation table name.');
+    }
+    return 'CREATE TABLE IF NOT EXISTS `' . $table . '` (
+        observation_key CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL PRIMARY KEY,
+        lifecycle ENUM(\'SCRAPED\', \'RESOLVED\') NOT NULL,
+        token_id VARCHAR(191) CHARACTER SET ascii COLLATE ascii_bin NULL,
+        first_token_id VARCHAR(191) CHARACTER SET ascii COLLATE ascii_bin NULL,
+        settled_token_id VARCHAR(191) CHARACTER SET ascii COLLATE ascii_bin NULL,
+        binary_yes_token_id VARCHAR(191) CHARACTER SET ascii COLLATE ascii_bin NULL,
+        binary_no_token_id VARCHAR(191) CHARACTER SET ascii COLLATE ascii_bin NULL,
+        condition_id VARCHAR(191) CHARACTER SET ascii COLLATE ascii_bin NULL,
+        event_slug VARCHAR(191) CHARACTER SET ascii COLLATE ascii_bin NULL,
+        market_slug VARCHAR(191) CHARACTER SET ascii COLLATE ascii_bin NULL,
+        question VARCHAR(768) NULL,
+        outcome_label VARCHAR(191) NULL,
+        first_outcome_label VARCHAR(191) NULL,
+        market_shape VARCHAR(32) NULL,
+        outcome_count SMALLINT UNSIGNED NULL,
+        tags_json TEXT NULL,
+        categories_json TEXT NULL,
+        event_start_at DATETIME NULL,
+        market_created_at DATETIME NULL,
+        end_at DATETIME NULL,
+        observed_at DATETIME NULL,
+        first_observed_at DATETIME NULL,
+        resolved_at DATETIME NULL,
+        resolution_checked_at DATETIME NULL,
+        market_probability DECIMAL(12,9) NULL,
+        first_market_probability DECIMAL(12,9) NULL,
+        final_outcome_price DECIMAL(12,9) NULL,
+        first_side_final_outcome_price DECIMAL(12,9) NULL,
+        net_yield DECIMAL(24,9) NULL,
+        annualized_return DECIMAL(24,9) NULL,
+        volume_usdc DECIMAL(24,6) NULL,
+        first_volume_usdc DECIMAL(24,6) NULL,
+        resolved_volume_usdc DECIMAL(24,6) NULL,
+        best_bid DECIMAL(12,9) NULL,
+        best_ask DECIMAL(12,9) NULL,
+        first_best_bid DECIMAL(12,9) NULL,
+        first_best_ask DECIMAL(12,9) NULL,
+        spread DECIMAL(12,9) NULL,
+        first_spread DECIMAL(12,9) NULL,
+        fee_rate DECIMAL(12,9) NULL,
+        first_fee_rate DECIMAL(12,9) NULL,
+        fees_enabled TINYINT(1) NULL,
+        market_closed TINYINT(1) NULL,
+        market_active TINYINT(1) NULL,
+        accepting_orders TINYINT(1) NULL,
+        event_started TINYINT(1) NULL,
+        research_only TINYINT(1) NULL,
+        resolution_status VARCHAR(48) NULL,
+        payload_checksum BINARY(32) NOT NULL,
+        created_at DATETIME(6) NOT NULL,
+        updated_at DATETIME(6) NOT NULL,
+        KEY trading_observations_lifecycle_end (lifecycle, end_at),
+        KEY trading_observations_scope (lifecycle, updated_at, market_probability, end_at),
+        KEY trading_observations_resolution_queue (lifecycle, resolution_checked_at, updated_at),
+        KEY trading_observations_token (token_id)
+    ) ENGINE=InnoDB ROW_FORMAT=DYNAMIC DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci';
+}
+
+/** @return \"legacy\"|\"lean\"|\"compact\" */
+function trading_storage_observation_schema_mode(PDO $pdo): string
 {
     $cacheKey = spl_object_id($pdo);
     if (isset($GLOBALS['trading_storage_observation_schema'][$cacheKey])) {
-        return $GLOBALS['trading_storage_observation_schema'][$cacheKey] === 'lean';
+        return $GLOBALS['trading_storage_observation_schema'][$cacheKey];
     }
     $statement = $pdo->prepare(
-        'SELECT 1 FROM information_schema.COLUMNS
+        'SELECT COLUMN_NAME FROM information_schema.COLUMNS
          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = "trading_observations"
-           AND COLUMN_NAME = "source_id" LIMIT 1'
+           AND COLUMN_NAME IN ("payload", "source_id", "question")'
     );
     $statement->execute();
-    $lean = $statement->fetchColumn() === false;
-    $GLOBALS['trading_storage_observation_schema'][$cacheKey] = $lean ? 'lean' : 'legacy';
-    return $lean;
+    $columns = array_fill_keys(array_map('strval', $statement->fetchAll(PDO::FETCH_COLUMN)), true);
+    $mode = isset($columns['payload'])
+        ? (isset($columns['source_id']) ? 'legacy' : 'lean')
+        : 'compact';
+    $GLOBALS['trading_storage_observation_schema'][$cacheKey] = $mode;
+    return $mode;
+}
+
+function trading_storage_observations_use_lean_schema(PDO $pdo): bool
+{
+    return trading_storage_observation_schema_mode($pdo) === 'lean';
+}
+
+function trading_storage_observations_are_compact(PDO $pdo): bool
+{
+    return trading_storage_observation_schema_mode($pdo) === 'compact';
 }
 
 function trading_storage_forget_observation_schema(PDO $pdo): void
@@ -618,6 +673,9 @@ function trading_storage_forget_observation_schema(PDO $pdo): void
 /** @return array<string, mixed> */
 function trading_storage_observation_statement_bindings(array $columns, bool $lean): array
 {
+    if (isset($columns['compactBindings']) && is_array($columns['compactBindings'])) {
+        return $columns['compactBindings'];
+    }
     if (!$lean) {
         return $columns;
     }
@@ -638,7 +696,14 @@ function trading_storage_observation_statement_bindings(array $columns, bool $le
 
 function trading_storage_observation_insert_ignore_statement(PDO $pdo): PDOStatement
 {
-    if (!trading_storage_observations_use_lean_schema($pdo)) {
+    $mode = trading_storage_observation_schema_mode($pdo);
+    if ($mode === 'compact') {
+        return $pdo->prepare(
+            'INSERT IGNORE INTO trading_observations (' . trading_storage_compact_observation_column_list() . ')
+             VALUES (' . trading_storage_compact_observation_placeholder_list() . ')'
+        );
+    }
+    if ($mode === 'legacy') {
         return $pdo->prepare(
             'INSERT IGNORE INTO trading_observations (
                observation_key, lifecycle, source_id, token_id, event_slug, market_slug, outcome_label, market_type,
@@ -1247,6 +1312,16 @@ function trading_storage_row_density(PDO $pdo): array
 function trading_storage_observation_payload_anatomy(PDO $pdo, int $sampleLimit = 200, array $keep = []): array
 {
     trading_storage_bootstrap($pdo);
+    if (trading_storage_observations_are_compact($pdo)) {
+        return [
+            'payloadStored' => false,
+            'sampled' => 0,
+            'storedBytes' => 0,
+            'decodedBytes' => 0,
+            'keptBytes' => 0,
+            'fields' => [],
+        ];
+    }
     $sampleLimit = max(10, min(1000, $sampleLimit));
     $half = (int) max(5, floor($sampleLimit / 2));
 
@@ -1701,7 +1776,8 @@ function trading_storage_restore_observation_archives_from_root(
             $lineNumber++;
             $scanned++;
             $row = json_decode(trim($line), true);
-            $payload = is_array($row) && is_array($row['payload'] ?? null) ? $row['payload'] : null;
+            $payload = is_array($row) && is_array($row['payload'] ?? $row['observation'] ?? null)
+                ? ($row['payload'] ?? $row['observation']) : null;
             $key = is_array($row) ? trim((string) ($row['observationKey'] ?? '')) : '';
             $lifecycle = strtoupper(is_array($row) ? (string) ($row['lifecycle'] ?? '') : '');
             $updatedAt = is_array($row) ? trim((string) ($row['updatedAt'] ?? '')) : '';
@@ -1853,8 +1929,9 @@ function trading_storage_resolved_observations_stream(PDO $pdo, callable $onRow,
 {
     trading_storage_bootstrap($pdo);
     $batch = max(50, min(2000, $batch));
+    $select = trading_storage_observations_are_compact($pdo) ? '*' : 'observation_key, payload';
     $statement = $pdo->prepare(
-        'SELECT observation_key, payload FROM trading_observations
+        'SELECT ' . $select . ' FROM trading_observations
          WHERE lifecycle = :lifecycle AND observation_key > :after
          ORDER BY observation_key ASC LIMIT ' . $batch
     );
@@ -1868,7 +1945,7 @@ function trading_storage_resolved_observations_stream(PDO $pdo, callable $onRow,
         }
         foreach ($rows as $row) {
             $after = (string) ($row['observation_key'] ?? '');
-            $decoded = trading_storage_unpack($row['payload'] ?? null);
+            $decoded = trading_storage_observation_row_to_item($row);
             if (!is_array($decoded)) {
                 // Counted as seen so the caller's total matches the table, and skipped rather
                 // than guessed at: a payload that will not decode is a row to investigate, not
@@ -1949,7 +2026,7 @@ function trading_storage_count_archived_rows(string $path): int
         $decoded = json_decode(trim($line), true);
         if (is_array($decoded)
             && (string) ($decoded['observationKey'] ?? '') !== ''
-            && is_array($decoded['payload'] ?? null)) {
+            && (is_array($decoded['payload'] ?? null) || is_array($decoded['observation'] ?? null))) {
             $rows++;
         }
     }
@@ -1998,8 +2075,9 @@ function trading_storage_reconcile_resolved_observations(PDO $pdo, int $limit = 
     $limit = max(50, min(5000, $limit));
     $olderThanDays = max(1, min(365, $olderThanDays));
     $cutoff = gmdate('Y-m-d H:i:s', time() - ($olderThanDays * 86400));
+    $compact = trading_storage_observations_are_compact($pdo);
     $select = $pdo->prepare(
-        'SELECT observation_key, payload, updated_at
+        'SELECT ' . ($compact ? '*' : 'observation_key, payload, updated_at') . '
          FROM trading_observations
          WHERE lifecycle = "SCRAPED" AND updated_at < :cutoff
          ORDER BY updated_at ASC, observation_key ASC
@@ -2019,17 +2097,11 @@ function trading_storage_reconcile_resolved_observations(PDO $pdo, int $limit = 
         ];
     }
 
-    $update = $pdo->prepare(
-        'UPDATE trading_observations
-         SET lifecycle = "RESOLVED", payload = :payload, payload_checksum = :checksum,
-             updated_at = :updatedAt
-         WHERE observation_key = :key AND lifecycle = "SCRAPED"'
-    );
     $proved = 0;
-    $reconciled = 0;
     $unreadable = 0;
+    $patches = [];
     foreach ($rows as $row) {
-        $payload = trading_storage_unpack($row['payload'] ?? null);
+        $payload = trading_storage_observation_row_to_item($row);
         if (!is_array($payload)) {
             $unreadable++;
             continue;
@@ -2038,34 +2110,214 @@ function trading_storage_reconcile_resolved_observations(PDO $pdo, int $limit = 
             continue;
         }
         $proved++;
-        // Do not manufacture or move resolvedAt/updatedAt. They drive chronological reports;
-        // this repair merely makes the terminal fact the row already carried queryable.
-        $payload['status'] = 'RESOLVED';
-        $payload['selectionStatus'] = 'RESOLVED';
-        $encoded = trading_storage_encode($payload);
-        $update->execute([
-            'payload' => trading_storage_pack_encoded($encoded),
-            'checksum' => hash('sha256', $encoded),
-            'updatedAt' => (string) ($row['updated_at'] ?? $cutoff),
-            'key' => (string) ($row['observation_key'] ?? ''),
-        ]);
-        $reconciled += $update->rowCount();
+        $patches[] = [
+            'observationKey' => (string) ($row['observation_key'] ?? ''),
+            'checkedAt' => (string) ($row['updated_at'] ?? $cutoff),
+            'marketClosed' => true,
+            'finalOutcomePrice' => $payload['finalOutcomePrice'],
+            'firstSideFinalOutcomePrice' => $payload['firstSideFinalOutcomePrice'] ?? null,
+            'settledTokenId' => $payload['settledTokenId'] ?? null,
+            'outcomeCount' => $payload['outcomeCount'] ?? null,
+            'binaryYesTokenId' => $payload['binaryYesTokenId'] ?? null,
+            'binaryNoTokenId' => $payload['binaryNoTokenId'] ?? null,
+            // Preserve an existing fact; the repair must not make old rows appear newly closed.
+            'resolvedAt' => $payload['resolvedAt'] ?? $row['updated_at'] ?? $cutoff,
+        ];
     }
+    $applied = $patches === [] ? ['applied' => 0] : trading_storage_apply_remote_resolutions($pdo, $patches);
 
     return [
         'examined' => count($rows),
         'proved' => $proved,
-        'reconciled' => $reconciled,
+        'reconciled' => (int) ($applied['applied'] ?? 0),
         'unreadable' => $unreadable,
         'done' => count($rows) < $limit,
         'cutoff' => $cutoff,
     ];
 }
 
+/**
+ * A bounded queue for the remote settlement verifier. Age only nominates a row for checking;
+ * it is never treated as evidence that a market resolved. The worker must prove the selected
+ * token's 0/1 price from that market's own Gamma record before it can change lifecycle.
+ */
+function trading_storage_resolution_candidates(PDO $pdo, int $limit = 250, int $olderThanDays = 7): array
+{
+    trading_storage_bootstrap($pdo);
+    $limit = max(25, min(1000, $limit));
+    $olderThanDays = max(1, min(365, $olderThanDays));
+    $cutoff = gmdate('Y-m-d H:i:s', time() - ($olderThanDays * 86400));
+    $compact = trading_storage_observations_are_compact($pdo);
+    $select = $compact ? '*' : 'observation_key, payload, updated_at';
+    $statement = $pdo->prepare(
+        'SELECT ' . $select . ' FROM trading_observations
+         WHERE lifecycle = "SCRAPED" AND updated_at < :cutoff
+         ORDER BY updated_at ASC, observation_key ASC LIMIT ' . $limit
+    );
+    $statement->execute(['cutoff' => $cutoff]);
+    $rows = [];
+    foreach ($statement->fetchAll(PDO::FETCH_ASSOC) as $row) {
+        $item = trading_storage_observation_row_to_item($row);
+        $key = trim((string) ($row['observation_key'] ?? ''));
+        $slug = trim((string) ($item['slug'] ?? ''));
+        $token = trim((string) ($item['firstTokenId'] ?? $item['tokenId'] ?? ''));
+        if ($key === '' || ($slug === '' && $token === '')) {
+            continue;
+        }
+        $rows[] = [
+            'observationKey' => $key,
+            // A sibling eventSlug is intentionally not returned as a fallback. It identifies
+            // a fixture, not a particular market, and was the historic source of false wins.
+            'marketSlug' => $slug,
+            'tokenId' => $token,
+            'outcome' => (string) ($item['firstOutcome'] ?? $item['outcome'] ?? ''),
+            'updatedAt' => (string) ($row['updated_at'] ?? ''),
+        ];
+    }
+    return ['cutoff' => $cutoff, 'candidates' => $rows, 'examined' => count($rows)];
+}
+
+function trading_storage_remote_resolution_is_proved(array $patch): bool
+{
+    if (($patch['marketClosed'] ?? false) !== true) {
+        return false;
+    }
+    if (!is_numeric($patch['finalOutcomePrice'] ?? null)) {
+        return false;
+    }
+    $price = (float) $patch['finalOutcomePrice'];
+    return $price <= 0.001 || $price >= 0.999;
+}
+
+/**
+ * Apply only proof returned by the independent Gamma verifier. A pending/not-found result
+ * merely records the check timestamp and remains SCRAPED; a terminal result keeps Gamma's
+ * original resolution time so chronological closed-trade lists never jump on a later scan.
+ */
+function trading_storage_apply_remote_resolutions(PDO $pdo, array $patches): array
+{
+    trading_storage_bootstrap($pdo);
+    $mode = trading_storage_observation_schema_mode($pdo);
+    $compact = $mode === 'compact';
+    $applied = $pending = $missing = $invalid = 0;
+    if ($compact) {
+        $statement = $pdo->prepare(
+            'UPDATE trading_observations SET
+                resolution_checked_at = :checkedAt,
+                lifecycle = IF(:proved = 1, "RESOLVED", lifecycle),
+                final_outcome_price = IF(:proved = 1, :finalPrice, final_outcome_price),
+                first_side_final_outcome_price = IF(:proved = 1, :firstSideFinalPrice, first_side_final_outcome_price),
+                settled_token_id = IF(:proved = 1, :settledTokenId, settled_token_id),
+                outcome_count = IF(:proved = 1, :outcomeCount, outcome_count),
+                binary_yes_token_id = IF(:proved = 1, :yesTokenId, binary_yes_token_id),
+                binary_no_token_id = IF(:proved = 1, :noTokenId, binary_no_token_id),
+                market_closed = IF(:proved = 1, 1, market_closed),
+                accepting_orders = IF(:proved = 1, 0, accepting_orders),
+                resolution_status = IF(:proved = 1, "FINAL_PRICE_AVAILABLE", resolution_status),
+                resolved_at = IF(:proved = 1, COALESCE(resolved_at, :resolvedAt), resolved_at),
+                updated_at = :updatedAt
+             WHERE observation_key = :key AND lifecycle = "SCRAPED"'
+        );
+    } else {
+        $statement = $pdo->prepare(
+            'SELECT observation_key, payload, ' . ($mode === 'legacy' ? 'resolved_at, ' : '') . 'updated_at FROM trading_observations
+             WHERE observation_key = :key AND lifecycle = "SCRAPED" LIMIT 1'
+        );
+        $update = $pdo->prepare(
+            'UPDATE trading_observations SET lifecycle = :lifecycle, payload = :payload,
+                payload_checksum = :checksum, '
+                . ($mode === 'legacy' ? 'resolved_at = :resolvedAt, ' : '') . 'updated_at = :updatedAt
+             WHERE observation_key = :key AND lifecycle = "SCRAPED"'
+        );
+    }
+    foreach ($patches as $patch) {
+        if (!is_array($patch) || !preg_match('/^[a-f0-9]{64}$/', (string) ($patch['observationKey'] ?? ''))) {
+            $invalid++;
+            continue;
+        }
+        $proved = trading_storage_remote_resolution_is_proved($patch);
+        $checkedAt = trading_storage_datetime($patch['checkedAt'] ?? null) ?? trading_storage_now();
+        $key = (string) $patch['observationKey'];
+        if ($compact) {
+            $statement->execute([
+                'checkedAt' => $checkedAt,
+                'proved' => $proved ? 1 : 0,
+                'finalPrice' => $proved ? (float) $patch['finalOutcomePrice'] : null,
+                'firstSideFinalPrice' => $proved && is_numeric($patch['firstSideFinalOutcomePrice'] ?? null)
+                    ? (float) $patch['firstSideFinalOutcomePrice'] : null,
+                'settledTokenId' => $proved ? (string) ($patch['settledTokenId'] ?? '') : null,
+                'outcomeCount' => $proved && is_numeric($patch['outcomeCount'] ?? null) ? (int) $patch['outcomeCount'] : null,
+                'yesTokenId' => $proved ? (string) ($patch['binaryYesTokenId'] ?? '') : null,
+                'noTokenId' => $proved ? (string) ($patch['binaryNoTokenId'] ?? '') : null,
+                'resolvedAt' => $proved ? (trading_storage_datetime($patch['resolvedAt'] ?? null) ?? $checkedAt) : null,
+                'updatedAt' => $checkedAt,
+                'key' => $key,
+            ]);
+            if ($statement->rowCount() === 0) {
+                $missing++;
+            } elseif ($proved) {
+                $applied++;
+            } else {
+                $pending++;
+            }
+            continue;
+        }
+        $statement->execute(['key' => $key]);
+        $row = $statement->fetch(PDO::FETCH_ASSOC);
+        $payload = is_array($row) ? trading_storage_observation_row_to_item($row) : null;
+        if (!is_array($payload)) {
+            $missing++;
+            continue;
+        }
+        $payload['resolutionCheckedAt'] = $checkedAt;
+        $lifecycle = 'SCRAPED';
+        $resolvedAt = $row['resolved_at'] ?? null;
+        if ($proved) {
+            $lifecycle = 'RESOLVED';
+            $payload['status'] = 'RESOLVED';
+            $payload['selectionStatus'] = 'RESOLVED';
+            $payload['marketClosed'] = true;
+            $payload['acceptingOrders'] = false;
+            $payload['resolutionStatus'] = 'FINAL_PRICE_AVAILABLE';
+            $payload['finalOutcomePrice'] = (float) $patch['finalOutcomePrice'];
+            foreach (['firstSideFinalOutcomePrice', 'settledTokenId', 'outcomeCount', 'binaryYesTokenId', 'binaryNoTokenId'] as $field) {
+                if (array_key_exists($field, $patch)) {
+                    $payload[$field] = $patch[$field];
+                }
+            }
+            $resolvedAt = $resolvedAt ?: (trading_storage_datetime($patch['resolvedAt'] ?? null) ?? $checkedAt);
+            $payload['resolvedAt'] = $resolvedAt;
+        }
+        $encoded = trading_storage_encode($payload);
+        $bindings = [
+            'lifecycle' => $lifecycle,
+            'payload' => trading_storage_pack_encoded($encoded),
+            'checksum' => hash('sha256', $encoded),
+            'updatedAt' => $checkedAt,
+            'key' => $key,
+        ];
+        if ($mode === 'legacy') {
+            $bindings['resolvedAt'] = $resolvedAt;
+        }
+        $update->execute($bindings);
+        if ($update->rowCount() === 0) {
+            $missing++;
+        } elseif ($proved) {
+            $applied++;
+        } else {
+            $pending++;
+        }
+    }
+    return compact('applied', 'pending', 'missing', 'invalid');
+}
+
 function trading_storage_archive_resolved_observations(PDO $pdo, int $limit = 2000, int $keepDays = 0): array
 {
     trading_storage_bootstrap($pdo);
     $limit = max(50, min(20000, $limit));
+    $mode = trading_storage_observation_schema_mode($pdo);
+    $compact = $mode === 'compact';
+    $ageColumn = $mode === 'lean' ? 'updated_at' : 'COALESCE(resolved_at, updated_at)';
     $root = __DIR__ . '/data/observation-archive';
     if (!is_dir($root) && !@mkdir($root, 0775, true) && !is_dir($root)) {
         throw new RuntimeException('Could not create the observation archive directory.');
@@ -2073,15 +2325,15 @@ function trading_storage_archive_resolved_observations(PDO $pdo, int $limit = 20
 
     // Oldest first, so a run that is cut short has still moved the rows least likely to be
     // wanted. keepDays leaves a recent tail in place for anything that reads back a window.
-    $sql = 'SELECT observation_key, lifecycle, payload, updated_at
+    $sql = 'SELECT ' . ($compact ? '*' : 'observation_key, lifecycle, payload, updated_at') . '
             FROM trading_observations
             WHERE lifecycle = :lifecycle';
     $params = ['lifecycle' => 'RESOLVED'];
     if ($keepDays > 0) {
-        $sql .= ' AND updated_at < (UTC_TIMESTAMP() - INTERVAL :keepDays DAY)';
+        $sql .= ' AND ' . $ageColumn . ' < (UTC_TIMESTAMP() - INTERVAL :keepDays DAY)';
         $params['keepDays'] = $keepDays;
     }
-    $sql .= ' ORDER BY updated_at ASC LIMIT ' . $limit;
+    $sql .= ' ORDER BY ' . $ageColumn . ' ASC LIMIT ' . $limit;
     $statement = $pdo->prepare($sql);
     $statement->execute($params);
     $rows = $statement->fetchAll();
@@ -2089,7 +2341,9 @@ function trading_storage_archive_resolved_observations(PDO $pdo, int $limit = 20
         return ['archived' => 0, 'deleted' => 0, 'file' => null, 'done' => true, 'remaining' => 0];
     }
 
-    $bucket = substr((string) ($rows[0]['updated_at'] ?? gmdate('Y-m-d')), 0, 7);
+    $bucket = substr((string) ($compact || $mode === 'legacy'
+        ? ($rows[0]['resolved_at'] ?? $rows[0]['updated_at'] ?? gmdate('Y-m-d'))
+        : ($rows[0]['updated_at'] ?? gmdate('Y-m-d'))), 0, 7);
     if (!preg_match('/^\d{4}-\d{2}$/', $bucket)) {
         $bucket = gmdate('Y-m');
     }
@@ -2107,7 +2361,7 @@ function trading_storage_archive_resolved_observations(PDO $pdo, int $limit = 20
     $written = 0;
     foreach ($rows as $row) {
         $key = (string) ($row['observation_key'] ?? '');
-        $payload = trading_storage_unpack($row['payload'] ?? null);
+        $payload = trading_storage_observation_row_to_item($row);
         if ($key === '' || !is_array($payload)) {
             // Left in the database rather than written as a row the restore cannot rebuild.
             continue;
@@ -2115,8 +2369,10 @@ function trading_storage_archive_resolved_observations(PDO $pdo, int $limit = 20
         $line = json_encode([
             'observationKey' => $key,
             'lifecycle' => (string) ($row['lifecycle'] ?? 'RESOLVED'),
-            'updatedAt' => (string) ($row['updated_at'] ?? ''),
-            'payload' => $payload,
+            'updatedAt' => (string) (($compact || $mode === 'legacy')
+                ? ($row['resolved_at'] ?? $row['updated_at'] ?? '')
+                : ($row['updated_at'] ?? '')),
+            ($compact ? 'observation' : 'payload') => $payload,
         ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
         if (!is_string($line)) {
             continue;
@@ -2181,6 +2437,7 @@ function trading_storage_archive_stale_scraped_observations(PDO $pdo, int $limit
 {
     trading_storage_bootstrap($pdo);
     $limit = max(50, min(20000, $limit));
+    $compact = trading_storage_observations_are_compact($pdo);
     // The execution catalogue itself has a three-day freshness window. Seven days leaves two
     // full scan cycles of recovery margin and makes a caller unable to accidentally archive
     // a still-current market by sending keepDays=0.
@@ -2191,7 +2448,7 @@ function trading_storage_archive_stale_scraped_observations(PDO $pdo, int $limit
     }
 
     $statement = $pdo->prepare(
-        'SELECT observation_key, lifecycle, payload, updated_at
+        'SELECT ' . ($compact ? '*' : 'observation_key, lifecycle, payload, updated_at') . '
          FROM trading_observations
          WHERE lifecycle = :lifecycle
            AND updated_at < (UTC_TIMESTAMP() - INTERVAL :keepDays DAY)
@@ -2229,7 +2486,7 @@ function trading_storage_archive_stale_scraped_observations(PDO $pdo, int $limit
     $written = 0;
     foreach ($rows as $row) {
         $key = (string) ($row['observation_key'] ?? '');
-        $payload = trading_storage_unpack($row['payload'] ?? null);
+        $payload = trading_storage_observation_row_to_item($row);
         if ($key === '' || !is_array($payload)) {
             // A row the restore path cannot rebuild remains in MySQL. Retention must never
             // turn a malformed payload into silent data loss.
@@ -2239,7 +2496,7 @@ function trading_storage_archive_stale_scraped_observations(PDO $pdo, int $limit
             'observationKey' => $key,
             'lifecycle' => 'SCRAPED',
             'updatedAt' => (string) ($row['updated_at'] ?? ''),
-            'payload' => $payload,
+            ($compact ? 'observation' : 'payload') => $payload,
         ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
         if (!is_string($line)) {
             continue;
@@ -2351,6 +2608,7 @@ function trading_storage_traded_observation_retention_plan(PDO $pdo, int $keepDa
 function trading_storage_archive_untraded_observations(PDO $pdo, int $limit = 2000, int $keepDays = 3): array
 {
     $plan = trading_storage_traded_observation_retention_plan($pdo, $keepDays);
+    $compact = trading_storage_observations_are_compact($pdo);
     $limit = max(50, min(20000, $limit));
     $keepDays = (int) $plan['keepDays'];
     $cutoff = (string) $plan['cutoff'];
@@ -2379,7 +2637,7 @@ function trading_storage_archive_untraded_observations(PDO $pdo, int $limit = 20
     $tradedTokens = '(SELECT DISTINCT token_id FROM trading_trades
         WHERE token_id IS NOT NULL AND token_id <> "")';
     $select = $pdo->prepare(
-        'SELECT o.observation_key, o.lifecycle, o.token_id, o.payload, o.updated_at
+        'SELECT ' . ($compact ? 'o.*' : 'o.observation_key, o.lifecycle, o.token_id, o.payload, o.updated_at') . '
          FROM trading_observations o
          LEFT JOIN ' . $tradedTokens . ' t ON t.token_id = o.token_id
          WHERE t.token_id IS NULL
@@ -2421,7 +2679,7 @@ function trading_storage_archive_untraded_observations(PDO $pdo, int $limit = 20
     $terminalReconciled = 0;
     foreach ($rows as $row) {
         $key = (string) ($row['observation_key'] ?? '');
-        $payload = trading_storage_unpack($row['payload'] ?? null);
+        $payload = trading_storage_observation_row_to_item($row);
         if ($key === '' || !is_array($payload)) {
             // The source row stays in MySQL when its recovery copy cannot be reconstructed.
             continue;
@@ -2443,7 +2701,7 @@ function trading_storage_archive_untraded_observations(PDO $pdo, int $limit = 20
             'lifecycle' => $archiveLifecycle,
             'tokenId' => (string) ($row['token_id'] ?? ''),
             'updatedAt' => (string) ($row['updated_at'] ?? ''),
-            'payload' => $payload,
+            ($compact ? 'observation' : 'payload') => $payload,
         ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
         if (!is_string($line)) {
             continue;
@@ -2523,7 +2781,7 @@ function trading_storage_stream_archived_observations(callable $onRow): int
         }
         while (($line = gzgets($handle)) !== false) {
             $decoded = json_decode(trim($line), true);
-            $payload = is_array($decoded) ? ($decoded['payload'] ?? null) : null;
+            $payload = is_array($decoded) ? ($decoded['payload'] ?? $decoded['observation'] ?? null) : null;
             $lifecycle = strtoupper(is_array($decoded) ? (string) ($decoded['lifecycle'] ?? 'RESOLVED') : '');
             if (!is_array($payload) || $lifecycle !== 'RESOLVED') {
                 continue;
@@ -3205,6 +3463,240 @@ function trading_storage_resolution_datetime(array $item): ?string
     return null;
 }
 
+/** @return list<string> */
+function trading_storage_compact_observation_columns_names(): array
+{
+    return [
+        'observation_key', 'lifecycle', 'token_id', 'first_token_id', 'settled_token_id',
+        'binary_yes_token_id', 'binary_no_token_id', 'condition_id', 'event_slug', 'market_slug',
+        'question', 'outcome_label', 'first_outcome_label', 'market_shape', 'outcome_count',
+        'tags_json', 'categories_json', 'event_start_at', 'market_created_at', 'end_at',
+        'observed_at', 'first_observed_at', 'resolved_at', 'resolution_checked_at',
+        'market_probability', 'first_market_probability', 'final_outcome_price',
+        'first_side_final_outcome_price', 'net_yield', 'annualized_return', 'volume_usdc',
+        'first_volume_usdc', 'resolved_volume_usdc', 'best_bid', 'best_ask', 'first_best_bid',
+        'first_best_ask', 'spread', 'first_spread', 'fee_rate', 'first_fee_rate', 'fees_enabled',
+        'market_closed', 'market_active', 'accepting_orders', 'event_started', 'research_only',
+        'resolution_status', 'payload_checksum', 'created_at', 'updated_at',
+    ];
+}
+
+function trading_storage_compact_observation_column_list(): string
+{
+    return implode(', ', trading_storage_compact_observation_columns_names());
+}
+
+function trading_storage_compact_observation_placeholder_list(): string
+{
+    return implode(', ', array_map(static fn (string $name): string => ':' . $name, trading_storage_compact_observation_columns_names()));
+}
+
+function trading_storage_compact_observation_bool(mixed $value): ?int
+{
+    if ($value === null || $value === '') {
+        return null;
+    }
+    if (is_bool($value)) {
+        return $value ? 1 : 0;
+    }
+    if (is_numeric($value)) {
+        return ((float) $value) !== 0.0 ? 1 : 0;
+    }
+    $normalized = strtolower(trim((string) $value));
+    if (in_array($normalized, ['true', 'yes', 'on'], true)) {
+        return 1;
+    }
+    if (in_array($normalized, ['false', 'no', 'off'], true)) {
+        return 0;
+    }
+    return null;
+}
+
+/** @return list<string> */
+function trading_storage_compact_observation_strings(array $item, array $fields): array
+{
+    $values = [];
+    foreach ($fields as $field) {
+        $raw = $item[$field] ?? [];
+        foreach (is_array($raw) ? $raw : [$raw] as $value) {
+            if (is_array($value)) {
+                $value = $value['slug'] ?? $value['name'] ?? $value['label'] ?? '';
+            }
+            if (is_scalar($value) && trim((string) $value) !== '') {
+                $values[] = trim((string) $value);
+            }
+        }
+    }
+    return array_values(array_unique($values));
+}
+
+/**
+ * One compact observation projection. It is intentionally a closed list: adding a new field
+ * to a scanner response does not silently restore multi-megabyte blobs to the database.
+ */
+function trading_storage_compact_observation_bindings(array $item, ?array $columns = null): array
+{
+    $columns ??= [];
+    $text = static function (mixed $value, int $limit): ?string {
+        if (!is_scalar($value)) {
+            return null;
+        }
+        $value = trim((string) $value);
+        if ($value === '') {
+            return null;
+        }
+        return function_exists('mb_substr') ? mb_substr($value, 0, $limit) : substr($value, 0, $limit);
+    };
+    $number = static fn (array $keys): ?float => trading_storage_number($item, $keys);
+    $tags = trading_storage_compact_observation_strings($item, [
+        'polymarketTags', 'derivedTags', 'tags', 'firstPolymarketTags', 'firstTags', 'riskCategory',
+    ]);
+    $categories = trading_storage_compact_observation_strings($item, [
+        'polymarketCategories', 'firstPolymarketCategories', 'categories', 'firstCategories',
+    ]);
+    $createdAt = $columns['createdAt'] ?? trading_storage_now();
+    $updatedAt = $columns['updatedAt'] ?? trading_storage_now();
+    $bindings = [
+        'observation_key' => $columns['key'] ?? trading_storage_observation_key($item),
+        'lifecycle' => $columns['lifecycle'] ?? trading_storage_lifecycle($item),
+        'token_id' => $text($item['tokenId'] ?? $item['clobTokenId'] ?? $item['firstTokenId'] ?? null, 191),
+        'first_token_id' => $text($item['firstTokenId'] ?? $item['tokenId'] ?? null, 191),
+        'settled_token_id' => $text($item['settledTokenId'] ?? null, 191),
+        'binary_yes_token_id' => $text($item['binaryYesTokenId'] ?? null, 191),
+        'binary_no_token_id' => $text($item['binaryNoTokenId'] ?? null, 191),
+        'condition_id' => $text($item['conditionId'] ?? null, 191),
+        'event_slug' => $text($item['eventSlug'] ?? null, 191),
+        'market_slug' => $text($item['slug'] ?? null, 191),
+        'question' => $text($item['question'] ?? $item['title'] ?? null, 768),
+        'outcome_label' => $text($item['outcome'] ?? null, 191),
+        'first_outcome_label' => $text($item['firstOutcome'] ?? $item['outcome'] ?? null, 191),
+        'market_shape' => $text($item['marketShape'] ?? $item['shape'] ?? null, 32),
+        'outcome_count' => is_numeric($item['outcomeCount'] ?? null) ? (int) $item['outcomeCount'] : null,
+        'tags_json' => trading_storage_encode($tags),
+        'categories_json' => trading_storage_encode($categories),
+        'event_start_at' => trading_storage_datetime($item['eventStartTime'] ?? $item['scheduledEventDate'] ?? null),
+        'market_created_at' => trading_storage_datetime($item['marketCreatedAt'] ?? $item['createdAt'] ?? null),
+        'end_at' => $columns['endAt'] ?? trading_storage_resolution_datetime($item),
+        'observed_at' => $columns['observedAt'] ?? trading_storage_datetime($item['observedAt'] ?? null),
+        'first_observed_at' => trading_storage_datetime($item['firstObservedAt'] ?? $item['observedAt'] ?? null),
+        'resolved_at' => $columns['resolvedAt'] ?? trading_storage_datetime($item['resolvedAt'] ?? $item['resolvedDetectedAt'] ?? null),
+        'resolution_checked_at' => trading_storage_datetime($item['resolutionCheckedAt'] ?? null),
+        'market_probability' => $columns['probability'] ?? $number(['marketProbability', 'marketPrice', 'firstMarketProbability']),
+        'first_market_probability' => $number(['firstMarketProbability', 'marketProbability', 'marketPrice']),
+        'final_outcome_price' => $number(['finalOutcomePrice']),
+        'first_side_final_outcome_price' => $number(['firstSideFinalOutcomePrice']),
+        'net_yield' => $columns['netYield'] ?? $number(['netYield']),
+        'annualized_return' => $columns['annualizedReturn'] ?? $number(['marketAnnualizedReturn', 'potentialAnnualizedReturn', 'annualizedReturn']),
+        'volume_usdc' => $columns['volume'] ?? $number(['volumeUsdc', 'liquidity', 'resolvedVolumeUsdc', 'volume']),
+        'first_volume_usdc' => $number(['firstVolumeUsdc', 'firstLiquidity', 'volumeUsdc', 'liquidity']),
+        'resolved_volume_usdc' => $number(['resolvedVolumeUsdc']),
+        'best_bid' => $number(['bestBid']),
+        'best_ask' => $number(['bestAsk']),
+        'first_best_bid' => $number(['firstBestBid']),
+        'first_best_ask' => $number(['firstBestAsk']),
+        'spread' => $number(['spread']),
+        'first_spread' => $number(['firstSpread']),
+        'fee_rate' => $number(['feeRate']),
+        'first_fee_rate' => $number(['firstFeeRate']),
+        'fees_enabled' => trading_storage_compact_observation_bool($item['feesEnabled'] ?? null),
+        'market_closed' => trading_storage_compact_observation_bool($item['marketClosed'] ?? null),
+        'market_active' => trading_storage_compact_observation_bool($item['marketActive'] ?? null),
+        'accepting_orders' => trading_storage_compact_observation_bool($item['acceptingOrders'] ?? null),
+        'event_started' => trading_storage_compact_observation_bool($item['eventStarted'] ?? null),
+        'research_only' => trading_storage_compact_observation_bool($item['researchOnly'] ?? null),
+        'resolution_status' => $text($item['resolutionStatus'] ?? null, 48),
+        'payload_checksum' => '',
+        'created_at' => $createdAt,
+        'updated_at' => $updatedAt,
+    ];
+    $checksumInput = $bindings;
+    unset($checksumInput['payload_checksum'], $checksumInput['created_at'], $checksumInput['updated_at']);
+    $encoded = trading_storage_encode($checksumInput);
+    $bindings['payload_checksum'] = hash('sha256', $encoded, true);
+    return $bindings;
+}
+
+/** @return array<string,mixed>|null */
+function trading_storage_compact_observation_row_to_item(array $row): ?array
+{
+    if (($row['observation_key'] ?? '') === '') {
+        return null;
+    }
+    $decode = static function (mixed $value): array {
+        $decoded = is_string($value) ? json_decode($value, true) : null;
+        return is_array($decoded) ? $decoded : [];
+    };
+    $bool = static fn (mixed $value): ?bool => $value === null ? null : ((int) $value === 1);
+    $item = [
+        'id' => null,
+        'tokenId' => $row['token_id'] ?? null,
+        'firstTokenId' => $row['first_token_id'] ?? null,
+        'settledTokenId' => $row['settled_token_id'] ?? null,
+        'binaryYesTokenId' => $row['binary_yes_token_id'] ?? null,
+        'binaryNoTokenId' => $row['binary_no_token_id'] ?? null,
+        'conditionId' => $row['condition_id'] ?? null,
+        'eventSlug' => $row['event_slug'] ?? null,
+        'slug' => $row['market_slug'] ?? null,
+        'question' => $row['question'] ?? null,
+        'outcome' => $row['outcome_label'] ?? null,
+        'firstOutcome' => $row['first_outcome_label'] ?? null,
+        'marketShape' => $row['market_shape'] ?? null,
+        'outcomeCount' => $row['outcome_count'] === null ? null : (int) $row['outcome_count'],
+        'polymarketTags' => $decode($row['tags_json'] ?? null),
+        'tags' => $decode($row['tags_json'] ?? null),
+        'firstPolymarketTags' => $decode($row['tags_json'] ?? null),
+        'firstTags' => $decode($row['tags_json'] ?? null),
+        'polymarketCategories' => $decode($row['categories_json'] ?? null),
+        'firstPolymarketCategories' => $decode($row['categories_json'] ?? null),
+        'eventStartTime' => $row['event_start_at'] ?? null,
+        'scheduledEventDate' => $row['event_start_at'] ?? null,
+        'marketCreatedAt' => $row['market_created_at'] ?? null,
+        'resolutionEndDate' => $row['end_at'] ?? null,
+        'endDate' => $row['end_at'] ?? null,
+        'observedAt' => $row['observed_at'] ?? $row['updated_at'] ?? null,
+        'firstObservedAt' => $row['first_observed_at'] ?? $row['observed_at'] ?? null,
+        'resolvedAt' => $row['resolved_at'] ?? null,
+        'resolutionCheckedAt' => $row['resolution_checked_at'] ?? null,
+        'marketProbability' => $row['market_probability'] === null ? null : (float) $row['market_probability'],
+        'firstMarketProbability' => $row['first_market_probability'] === null ? null : (float) $row['first_market_probability'],
+        'finalOutcomePrice' => $row['final_outcome_price'] === null ? null : (float) $row['final_outcome_price'],
+        'firstSideFinalOutcomePrice' => $row['first_side_final_outcome_price'] === null ? null : (float) $row['first_side_final_outcome_price'],
+        'netYield' => $row['net_yield'] === null ? null : (float) $row['net_yield'],
+        'marketAnnualizedReturn' => $row['annualized_return'] === null ? null : (float) $row['annualized_return'],
+        'potentialAnnualizedReturn' => $row['annualized_return'] === null ? null : (float) $row['annualized_return'],
+        'volumeUsdc' => $row['volume_usdc'] === null ? null : (float) $row['volume_usdc'],
+        'firstVolumeUsdc' => $row['first_volume_usdc'] === null ? null : (float) $row['first_volume_usdc'],
+        'resolvedVolumeUsdc' => $row['resolved_volume_usdc'] === null ? null : (float) $row['resolved_volume_usdc'],
+        'bestBid' => $row['best_bid'] === null ? null : (float) $row['best_bid'],
+        'bestAsk' => $row['best_ask'] === null ? null : (float) $row['best_ask'],
+        'firstBestBid' => $row['first_best_bid'] === null ? null : (float) $row['first_best_bid'],
+        'firstBestAsk' => $row['first_best_ask'] === null ? null : (float) $row['first_best_ask'],
+        'spread' => $row['spread'] === null ? null : (float) $row['spread'],
+        'firstSpread' => $row['first_spread'] === null ? null : (float) $row['first_spread'],
+        'feeRate' => $row['fee_rate'] === null ? null : (float) $row['fee_rate'],
+        'firstFeeRate' => $row['first_fee_rate'] === null ? null : (float) $row['first_fee_rate'],
+        'feesEnabled' => $bool($row['fees_enabled'] ?? null),
+        'marketClosed' => $bool($row['market_closed'] ?? null),
+        'marketActive' => $bool($row['market_active'] ?? null),
+        'acceptingOrders' => $bool($row['accepting_orders'] ?? null),
+        'eventStarted' => $bool($row['event_started'] ?? null),
+        'researchOnly' => $bool($row['research_only'] ?? null),
+        'resolutionStatus' => $row['resolution_status'] ?? null,
+        'status' => $row['lifecycle'] ?? 'SCRAPED',
+        'selectionStatus' => $row['lifecycle'] ?? 'SCRAPED',
+    ];
+    return array_filter($item, static fn (mixed $value): bool => $value !== null);
+}
+
+function trading_storage_observation_row_to_item(array $row): ?array
+{
+    if (array_key_exists('payload', $row)) {
+        $decoded = trading_storage_unpack($row['payload'] ?? null);
+        return is_array($decoded) ? $decoded : null;
+    }
+    return trading_storage_compact_observation_row_to_item($row);
+}
+
 /**
  * One observation as the columns the table stores it in.
  *
@@ -3228,7 +3720,7 @@ function trading_storage_observation_columns(array $item): array
         }
     }
     $tags = array_values(array_unique($tags));
-    return [
+    $columns = [
         'key' => trading_storage_observation_key($item),
         'lifecycle' => trading_storage_lifecycle($item),
         'sourceId' => isset($item['id']) ? (string) $item['id'] : null,
@@ -3254,6 +3746,8 @@ function trading_storage_observation_columns(array $item): array
         'createdAt' => trading_storage_now(),
         'updatedAt' => trading_storage_now(),
     ];
+    $columns['compactBindings'] = trading_storage_compact_observation_bindings($item, $columns);
+    return $columns;
 }
 
 function trading_storage_observations_upsert(array $items): int
@@ -3263,6 +3757,9 @@ function trading_storage_observations_upsert(array $items): int
         throw new RuntimeException('Trading MySQL storage is unavailable.');
     }
     trading_storage_bootstrap($pdo);
+    if (trading_storage_observations_are_compact($pdo)) {
+        return trading_storage_compact_observations_upsert($pdo, $items);
+    }
     $lean = trading_storage_observations_use_lean_schema($pdo);
     $statement = $pdo->prepare($lean
         ? "INSERT INTO trading_observations (
@@ -3355,7 +3852,235 @@ function trading_storage_observations_upsert(array $items): int
         $pdo->rollBack();
         throw $error;
     }
+    // Once a compact shadow is prepared, every incoming scan is mirrored there as well.
+    // This closes the race between a long backfill and the final metadata-only rename.
+    if (trading_storage_observation_compact_shadow_exists($pdo)) {
+        trading_storage_compact_observations_upsert($pdo, $items, 'trading_observations_compact');
+    }
     return $count;
+}
+
+function trading_storage_compact_observations_upsert(PDO $pdo, array $items, string $table = 'trading_observations'): int
+{
+    if (!preg_match('/^[A-Za-z0-9_]+$/', $table)) {
+        throw new InvalidArgumentException('Invalid compact observation table name.');
+    }
+    $columns = trading_storage_compact_observation_columns_names();
+    $updates = [];
+    foreach ($columns as $column) {
+        if (in_array($column, ['observation_key', 'created_at', 'lifecycle'], true)) {
+            continue;
+        }
+        $updates[] = $column . ' = IF(payload_checksum = VALUES(payload_checksum)'
+            . ' OR (lifecycle = \'RESOLVED\' AND VALUES(lifecycle) <> \'RESOLVED\'), '
+            . $column . ', VALUES(' . $column . '))';
+    }
+    $updates[] = 'lifecycle = IF(lifecycle = \'RESOLVED\' OR VALUES(lifecycle) = \'RESOLVED\', \'RESOLVED\', VALUES(lifecycle))';
+    $statement = $pdo->prepare(
+        'INSERT INTO `' . $table . '` (' . trading_storage_compact_observation_column_list() . ')'
+        . ' VALUES (' . trading_storage_compact_observation_placeholder_list() . ')'
+        . ' ON DUPLICATE KEY UPDATE ' . implode(', ', $updates)
+    );
+    $count = 0;
+    $pdo->beginTransaction();
+    try {
+        foreach ($items as $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+            $statement->execute(trading_storage_compact_observation_bindings($item));
+            $count++;
+        }
+        $pdo->commit();
+    } catch (Throwable $error) {
+        $pdo->rollBack();
+        throw $error;
+    }
+    return $count;
+}
+
+function trading_storage_table_exists(PDO $pdo, string $table): bool
+{
+    if (!preg_match('/^[A-Za-z0-9_]+$/', $table)) {
+        throw new InvalidArgumentException('Invalid trading storage table name.');
+    }
+    $statement = $pdo->prepare(
+        'SELECT 1 FROM information_schema.TABLES
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :table LIMIT 1'
+    );
+    $statement->execute(['table' => $table]);
+    return $statement->fetchColumn() !== false;
+}
+
+function trading_storage_observation_compact_shadow_exists(PDO $pdo): bool
+{
+    return trading_storage_table_exists($pdo, 'trading_observations_compact');
+}
+
+function trading_storage_compact_observation_migration_prepare(PDO $pdo): array
+{
+    trading_storage_bootstrap($pdo);
+    if (trading_storage_observations_are_compact($pdo)) {
+        return ['ready' => true, 'alreadyCompact' => true];
+    }
+    $pdo->exec(trading_storage_compact_observations_ddl('trading_observations_compact'));
+    trading_storage_meta_put('observation-compact-migration', json_encode([
+        'preparedAt' => gmdate('c'),
+        'sourceSchema' => trading_storage_observation_schema_mode($pdo),
+    ], JSON_UNESCAPED_SLASHES));
+    return [
+        'ready' => true,
+        'alreadyCompact' => false,
+        'sourceRows' => (int) $pdo->query('SELECT COUNT(*) FROM trading_observations')->fetchColumn(),
+        'shadowRows' => (int) $pdo->query('SELECT COUNT(*) FROM trading_observations_compact')->fetchColumn(),
+    ];
+}
+
+function trading_storage_compact_observations_copy_batch(PDO $pdo, string $after = '', int $limit = 500): array
+{
+    trading_storage_bootstrap($pdo);
+    if (trading_storage_observations_are_compact($pdo)) {
+        return ['copied' => 0, 'cursor' => $after, 'done' => true, 'alreadyCompact' => true];
+    }
+    if (!trading_storage_observation_compact_shadow_exists($pdo)) {
+        throw new RuntimeException('Compact observation migration has not been prepared.');
+    }
+    $limit = max(50, min(2000, $limit));
+    $select = $pdo->prepare(
+        'SELECT observation_key, lifecycle, payload, created_at, updated_at
+         FROM trading_observations WHERE observation_key > :after
+         ORDER BY observation_key ASC LIMIT ' . $limit
+    );
+    $select->execute(['after' => $after]);
+    $rows = $select->fetchAll(PDO::FETCH_ASSOC);
+    if ($rows === []) {
+        return ['copied' => 0, 'cursor' => $after, 'done' => true];
+    }
+    $columns = trading_storage_compact_observation_columns_names();
+    $updates = [];
+    foreach ($columns as $column) {
+        if (in_array($column, ['observation_key', 'created_at', 'lifecycle'], true)) {
+            continue;
+        }
+        $updates[] = $column . ' = VALUES(' . $column . ')';
+    }
+    $updates[] = 'lifecycle = IF(lifecycle = \'RESOLVED\' OR VALUES(lifecycle) = \'RESOLVED\', \'RESOLVED\', VALUES(lifecycle))';
+    $insert = $pdo->prepare(
+        'INSERT INTO trading_observations_compact (' . trading_storage_compact_observation_column_list() . ')'
+        . ' VALUES (' . trading_storage_compact_observation_placeholder_list() . ')'
+        . ' ON DUPLICATE KEY UPDATE ' . implode(', ', $updates)
+    );
+    $copied = $unreadable = 0;
+    $cursor = $after;
+    $pdo->beginTransaction();
+    try {
+        foreach ($rows as $row) {
+            $cursor = (string) ($row['observation_key'] ?? $cursor);
+            $item = trading_storage_observation_row_to_item($row);
+            if (!is_array($item)) {
+                $unreadable++;
+                continue;
+            }
+            $source = [
+                'key' => $cursor,
+                'lifecycle' => (string) ($row['lifecycle'] ?? 'SCRAPED'),
+                'createdAt' => (string) ($row['created_at'] ?? trading_storage_now()),
+                'updatedAt' => (string) ($row['updated_at'] ?? trading_storage_now()),
+            ];
+            $insert->execute(trading_storage_compact_observation_bindings($item, $source));
+            $copied++;
+        }
+        $pdo->commit();
+    } catch (Throwable $error) {
+        $pdo->rollBack();
+        throw $error;
+    }
+    return [
+        'copied' => $copied,
+        'unreadable' => $unreadable,
+        'cursor' => $cursor,
+        'done' => count($rows) < $limit,
+    ];
+}
+
+function trading_storage_compact_observations_migration_verify(PDO $pdo): array
+{
+    trading_storage_bootstrap($pdo);
+    if (trading_storage_observations_are_compact($pdo)) {
+        return ['verified' => true, 'alreadyCompact' => true];
+    }
+    if (!trading_storage_observation_compact_shadow_exists($pdo)) {
+        return ['verified' => false, 'reason' => 'compact shadow table is missing'];
+    }
+    $source = $pdo->query(
+        'SELECT COUNT(*) AS rows_total, SUM(lifecycle = "SCRAPED") AS scraped, SUM(lifecycle = "RESOLVED") AS resolved
+         FROM trading_observations'
+    )->fetch(PDO::FETCH_ASSOC) ?: [];
+    $shadow = $pdo->query(
+        'SELECT COUNT(*) AS rows_total, SUM(lifecycle = "SCRAPED") AS scraped, SUM(lifecycle = "RESOLVED") AS resolved
+         FROM trading_observations_compact'
+    )->fetch(PDO::FETCH_ASSOC) ?: [];
+    $missing = (int) $pdo->query(
+        'SELECT COUNT(*) FROM trading_observations o
+         LEFT JOIN trading_observations_compact c ON c.observation_key = o.observation_key
+         WHERE c.observation_key IS NULL'
+    )->fetchColumn();
+    $mismatchedLifecycle = (int) $pdo->query(
+        'SELECT COUNT(*) FROM trading_observations o
+         JOIN trading_observations_compact c ON c.observation_key = o.observation_key
+         WHERE o.lifecycle <> c.lifecycle'
+    )->fetchColumn();
+    return [
+        'source' => array_map('intval', $source),
+        'shadow' => array_map('intval', $shadow),
+        'missing' => $missing,
+        'mismatchedLifecycle' => $mismatchedLifecycle,
+        'verified' => $missing === 0 && $mismatchedLifecycle === 0
+            && (int) ($source['rows_total'] ?? -1) === (int) ($shadow['rows_total'] ?? -2),
+    ];
+}
+
+function trading_storage_compact_observations_activate(PDO $pdo): array
+{
+    $verification = trading_storage_compact_observations_migration_verify($pdo);
+    if (!($verification['verified'] ?? false)) {
+        throw new RuntimeException('Compact observation migration is not verified: ' . trading_storage_encode($verification));
+    }
+    if (($verification['alreadyCompact'] ?? false) === true) {
+        return ['activated' => false, 'alreadyCompact' => true] + $verification;
+    }
+    $retired = 'trading_observations_payload_retired';
+    // A leftover source table means an earlier cutover needs human inspection. Keeping it is
+    // cheap compared with accidentally discarding the only copy of the old observations.
+    if (trading_storage_table_exists($pdo, $retired)) {
+        throw new RuntimeException('A retired payload table already exists; refusing a second compact cutover.');
+    }
+    // Rename is metadata-only and atomic. The shadow received live writes throughout copy,
+    // so there is no gap where an ingest can be lost between verification and cutover.
+    $pdo->exec('RENAME TABLE trading_observations TO `' . $retired . '`, trading_observations_compact TO trading_observations');
+    trading_storage_forget_observation_schema($pdo);
+    $post = $pdo->query(
+        'SELECT COUNT(*) AS rows_total, SUM(lifecycle = "SCRAPED") AS scraped, SUM(lifecycle = "RESOLVED") AS resolved
+         FROM trading_observations'
+    )->fetch(PDO::FETCH_ASSOC) ?: [];
+    $source = $verification['source'] ?? [];
+    $postMatchesSource = (int) ($post['rows_total'] ?? -1) === (int) ($source['rows_total'] ?? -2)
+        && (int) ($post['scraped'] ?? -1) === (int) ($source['scraped'] ?? -2)
+        && (int) ($post['resolved'] ?? -1) === (int) ($source['resolved'] ?? -2);
+    if (!$postMatchesSource) {
+        throw new RuntimeException('Compact observation cutover verification failed; retained payload table is still available.');
+    }
+    $pdo->exec('DROP TABLE `' . $retired . '`');
+    trading_storage_meta_put('observation-compact-migration', json_encode([
+        'activatedAt' => gmdate('c'),
+        'payloadStored' => false,
+        'verification' => $verification,
+    ], JSON_UNESCAPED_SLASHES));
+    return [
+        'activated' => true,
+        'payloadTableDropped' => true,
+        'postCutover' => array_map('intval', $post),
+    ];
 }
 
 /**
@@ -3579,7 +4304,8 @@ function trading_storage_observations_for_scope(array $criteria, int $limit = 40
     // has thousands of ties -- every market with no return recorded shares NULL -- and the
     // database is free to order tied rows differently on each page. A walk over a
     // non-total order silently repeats some rows and misses others.
-    $sql = 'SELECT payload FROM trading_observations WHERE ' . implode(' AND ', $where)
+    $compact = trading_storage_observations_are_compact($pdo);
+    $sql = 'SELECT ' . ($compact ? '*' : 'payload') . ' FROM trading_observations WHERE ' . implode(' AND ', $where)
         . ' ORDER BY annualized_return DESC, end_at ASC, observation_key ASC'
         . ' LIMIT ' . max(1, min(5000, $limit))
         // OFFSET is only legal after LIMIT, so an offset alone would quietly serve the
@@ -3588,8 +4314,8 @@ function trading_storage_observations_for_scope(array $criteria, int $limit = 40
     $statement = $pdo->prepare($sql);
     $statement->execute($params);
     $rows = [];
-    while (($payload = $statement->fetchColumn()) !== false) {
-        $decoded = trading_storage_unpack($payload);
+    while (($row = $compact ? $statement->fetch(PDO::FETCH_ASSOC) : (($payload = $statement->fetchColumn()) === false ? false : ['payload' => $payload])) !== false) {
+        $decoded = trading_storage_observation_row_to_item($row);
         if (is_array($decoded)) {
             $rows[] = $decoded;
         }
@@ -3618,7 +4344,8 @@ function trading_storage_observations_fetch(string $lifecycle, int $limit = 0, i
     // freshOnly is what the CURRENT catalogue means once the database is serving. Nothing is
     // deleted -- the history stays and the archive views read all of it -- but a market last
     // seen eleven days ago is not part of the catalogue the bots choose candidates from.
-    $sql = 'SELECT payload FROM trading_observations WHERE lifecycle = :lifecycle'
+    $compact = trading_storage_observations_are_compact($pdo);
+    $sql = 'SELECT ' . ($compact ? '*' : 'payload') . ' FROM trading_observations WHERE lifecycle = :lifecycle'
         . ($freshOnly ? ' AND updated_at >= :freshSince' : '')
         . ' ORDER BY updated_at DESC, observation_key DESC';
     if ($limit > 0) {
@@ -3636,8 +4363,8 @@ function trading_storage_observations_fetch(string $lifecycle, int $limit = 0, i
     }
     $statement->execute($bindings);
     $rows = [];
-    while (($payload = $statement->fetchColumn()) !== false) {
-        $decoded = trading_storage_unpack($payload);
+    while (($row = $compact ? $statement->fetch(PDO::FETCH_ASSOC) : (($payload = $statement->fetchColumn()) === false ? false : ['payload' => $payload])) !== false) {
+        $decoded = trading_storage_observation_row_to_item($row);
         if (is_array($decoded)) {
             $rows[] = $decoded;
         }

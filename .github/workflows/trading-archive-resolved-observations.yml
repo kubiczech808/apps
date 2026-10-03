@@ -45,8 +45,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     concurrency:
-      # Never two at once: both would select the same oldest rows.
-      group: trading-archive-resolved-observations
+      # The archive can only see terminal rows after the verifier proves them. Keep the
+      # two expensive maintenance walks out of each other's way on shared hosting.
+      group: trading-observation-resolution-maintenance-${{ github.ref }}
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4

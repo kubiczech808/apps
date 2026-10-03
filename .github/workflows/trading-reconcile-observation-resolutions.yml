@@ -1,0 +1,45 @@
+name: Reconcile Stale Trading Observations
+
+on:
+  schedule:
+    # It is intentionally a separate, low-concurrency maintenance lane. Market scans keep
+    # current data fresh; this worker proves historic settlements in the background.
+    - cron: '17,47 * * * *'
+  workflow_dispatch:
+    inputs:
+      batches:
+        description: "Batches to verify (25-1000 rows each)"
+        required: false
+        default: "12"
+        type: string
+      batch_limit:
+        description: "Rows per bounded batch"
+        required: false
+        default: "250"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: trading-observation-resolution-maintenance-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 42
+    env:
+      TRADING_STORAGE_ADMIN_URL: https://www.osobnizkusenosti.cz/trading/api.php?action=storage-admin
+      TRADING_TRIGGER_KEY: ${{ secrets.POLYTRADING_DB_PASSWORD }}
+      RESOLUTION_OLDER_THAN_DAYS: "7"
+      RESOLUTION_BATCHES: ${{ inputs.batches || '12' }}
+      RESOLUTION_BATCH_LIMIT: ${{ inputs.batch_limit || '250' }}
+      RESOLUTION_CONCURRENCY: "8"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Verify terminal outcomes against their exact Polymarket market
+        run: node trading/tools/reconcile-observation-resolutions.mjs

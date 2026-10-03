@@ -8830,8 +8830,8 @@ test("execution pass: skips catalogue maintenance and keeps every decision input
   // Skipped: maintenance of the record, none of which the decision reads.
   assert.match(source, /scanOnly \|\| EXECUTION_PASS\s*\?\s*expirePastEvaluations/,
     "the stored-evaluation resolution sync must not run on an execution pass");
-  assert.match(source, /if \(!scanOnly && !EXECUTION_PASS\) \{\s*state\.marketObservations = await timed\("observationResolutionSync"/,
-    "nor the stored-observation resolution sync");
+  assert.match(source, /if \(!EXECUTION_PASS\) \{\s*\/\/ A scan-only run is still the main clock/s,
+    "the stored-observation resolution sync must run on scans, but never on an execution pass");
   assert.match(source, /if \(!EXECUTION_PASS\) \{\s*try \{\s*const observations = await timed\("marketScan"/,
     "nor a fresh market scrape");
   assert.match(source, /if \(!EXECUTION_PASS\) \{\s*portfolioState\.trades = await reviewClosedTradesWithAi/,

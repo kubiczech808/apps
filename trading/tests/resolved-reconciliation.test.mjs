@@ -8,6 +8,12 @@ const WORKFLOW = readFileSync(
   new URL("../../.github/workflows/trading-archive-resolved-observations.yml", import.meta.url),
   "utf8",
 ).replace(/\r\n/g, "\n");
+const RESOLUTION_WORKER = readFileSync(
+  new URL("../tools/reconcile-observation-resolutions.mjs", import.meta.url), "utf8",
+).replace(/\r\n/g, "\n");
+const RESOLUTION_WORKFLOW = readFileSync(
+  new URL("../../.github/workflows/trading-reconcile-observation-resolutions.yml", import.meta.url), "utf8",
+).replace(/\r\n/g, "\n");
 
 test("only durable terminal proof can turn an old scraped row into a resolved archival candidate", () => {
   const start = STORAGE.indexOf("function trading_storage_payload_proves_resolved");
@@ -19,14 +25,26 @@ test("only durable terminal proof can turn an old scraped row into a resolved ar
   assert.doesNotMatch(body, /endDate/, "an estimated end date must never settle a market");
 });
 
-test("reconciliation preserves historical ordering and exposes one guarded storage operation", () => {
+test("reconciliation preserves the first terminal timestamp and exposes guarded storage operations", () => {
   const start = STORAGE.indexOf("function trading_storage_reconcile_resolved_observations");
   assert.ok(start >= 0);
   const body = STORAGE.slice(start, STORAGE.indexOf("\n}\n", start) + 2);
   assert.match(body, /ORDER BY updated_at ASC/);
-  assert.match(body, /updated_at = :updatedAt/);
-  assert.doesNotMatch(body, /resolvedAt\s*=/, "the repair must not rewrite the resolved timestamp");
+  assert.match(body, /resolvedAt.*\$row\['updated_at'\]/s);
   assert.match(API, /operation === 'reconcile-resolved-observations'/);
+  assert.match(API, /operation === 'resolution-candidates'/);
+  assert.match(API, /operation === 'apply-remote-resolutions'/);
+});
+
+test("remote resolution never uses a fixture slug or an end date as settlement proof", () => {
+  assert.match(RESOLUTION_WORKER, /marketSlug/);
+  assert.doesNotMatch(RESOLUTION_WORKER, /eventSlug/,
+    "the worker must not fall back to a fixture-level sibling market");
+  assert.match(RESOLUTION_WORKER, /bool\(market\.closed\)/);
+  assert.match(RESOLUTION_WORKER, /price <= 0\.001 \|\| price >= 0\.999/);
+  assert.doesNotMatch(RESOLUTION_WORKER, /endDate/,
+    "an estimated end date cannot be used as settlement evidence");
+  assert.match(RESOLUTION_WORKFLOW, /17,47 \* \* \* \*/);
 });
 
 test("the scheduled archive reconciles stale terminal rows first and keeps a seven-day live window", () => {

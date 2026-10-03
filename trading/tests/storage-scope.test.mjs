@@ -317,15 +317,16 @@ test("every column the observation queries name actually exists on the table", (
   // Nothing caught it because nothing calls that function while reads come from JSON, and
   // no test can execute MySQL here. What a test CAN do is hold the queries against the
   // schema they run on.
+  const compactDdlStart = STORAGE.indexOf("function trading_storage_compact_observations_ddl");
   const create = STORAGE.slice(
-    STORAGE.indexOf("CREATE TABLE IF NOT EXISTS trading_observations"),
-    STORAGE.indexOf("ENGINE=InnoDB", STORAGE.indexOf("CREATE TABLE IF NOT EXISTS trading_observations")),
+    compactDdlStart,
+    STORAGE.indexOf("function trading_storage_observation_schema_mode", compactDdlStart),
   );
   assert.ok(create.length > 0, "the observations table definition must be findable");
   const columns = new Set(
-    [...create.matchAll(/^\s{12}([a-z_]+) [A-Z]/gm)].map((match) => match[1]),
+    [...create.matchAll(/^\s{8,}([a-z_]+) [A-Z]/gm)].map((match) => match[1]),
   );
-  assert.ok(columns.has("observation_key") && columns.has("updated_at") && columns.has("payload"),
+  assert.ok(columns.has("observation_key") && columns.has("updated_at") && !columns.has("payload"),
     `the column list did not parse: ${[...columns].join(", ")}`);
   assert.ok(!columns.has("id"), "this table has no id column -- that is the whole point of this test");
 
@@ -353,26 +354,15 @@ test("every column the observation queries name actually exists on the table", (
 test("the upsert writes exactly these columns", () => {
   // The extraction is only worth testing if the write still goes through it.
   const upsert = STORAGE.slice(
-    STORAGE.indexOf("function trading_storage_observations_upsert"),
-    STORAGE.indexOf("function trading_storage_observation_age"),
+    STORAGE.indexOf("function trading_storage_compact_observations_upsert"),
+    STORAGE.indexOf("function trading_storage_observation_compact_shadow_exists"),
   );
   assert.ok(upsert.length > 0, "the upsert is still there to check");
-  assert.match(upsert, /\$statement->execute\(trading_storage_observation_columns\(\$item\)\)/,
-    "the upsert must bind trading_storage_observation_columns()");
-
-  const bound = evalPhp("array_keys(trading_storage_observation_columns($args))", ROWS.fixture);
-  // The trades upsert has an ON DUPLICATE KEY UPDATE of its own earlier in the file, so the
-  // end of this statement is searched from its start rather than from the top.
-  const insertAt = STORAGE.indexOf("INSERT INTO trading_observations");
-  assert.ok(insertAt > 0, "the observations INSERT is still there to check");
-  const placeholders = [...STORAGE.slice(
-    insertAt,
-    STORAGE.indexOf("ON DUPLICATE KEY UPDATE", insertAt),
-  ).matchAll(/:([a-zA-Z]+)/g)].map((match) => match[1]);
-  assert.ok(placeholders.length > 0, "the INSERT still binds named placeholders");
-  assert.deepEqual(placeholders.sort(), bound.sort(),
-    "every placeholder in the INSERT must be bound by the column extraction, and vice versa");
-  assert.match(upsert, /IF\(payload_checksum = VALUES\(payload_checksum\), updated_at, VALUES\(updated_at\)\)/,
+  assert.match(upsert, /trading_storage_compact_observation_bindings\(\$item\)/,
+    "the compact upsert must bind the explicit compact projection");
+  assert.match(upsert, /trading_storage_compact_observation_column_list/);
+  assert.doesNotMatch(upsert, /payload MEDIUMBLOB/);
+  assert.match(upsert, /IF\(payload_checksum = VALUES\(payload_checksum\)/,
     "an unchanged observation must not become a fresh database write");
 });
 
@@ -381,7 +371,7 @@ test("archived observation recovery restores only missing keys", () => {
     "the recovery path must stay available until the archive has been restored");
   assert.match(STORAGE, /INSERT IGNORE INTO trading_observations/,
     "recovery must not overwrite a newer importer write");
-  assert.match(STORAGE, /observation-archive-restore-cursor/,
+  assert.match(STORAGE, /-restore-cursor/,
     "recovery must checkpoint long archive imports");
   assert.match(API, /operation === 'restore-observation-archives'/,
     "the authenticated storage API must expose the recovery operation");

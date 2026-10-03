@@ -1,0 +1,40 @@
+name: Compact Trading Observation Storage
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Copy, verify and replace observation payload storage"
+        required: true
+        type: boolean
+        default: false
+      batch_size:
+        description: "Rows per verified copy request"
+        required: false
+        type: string
+        default: "750"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: trading-observation-compact-migration-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  compact:
+    if: inputs.confirm == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    env:
+      TRADING_STORAGE_ADMIN_URL: https://www.osobnizkusenosti.cz/trading/api.php?action=storage-admin
+      TRADING_TRIGGER_KEY: ${{ secrets.POLYTRADING_DB_PASSWORD }}
+      COMPACT_MIGRATION_BATCH_SIZE: ${{ inputs.batch_size || '750' }}
+      COMPACT_MIGRATION_MAX_BATCHES: "1000"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Copy and verify compact projection before removing payload storage
+        run: node trading/tools/migrate-observations-compact.mjs

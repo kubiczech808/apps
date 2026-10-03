@@ -137,6 +137,9 @@ jobs:
       TRADING_PACER_TICK: ${{ github.event.inputs.pacer_tick || '' }}
       PAPER_MAX_RESOLUTION_DAYS: "7"
       PAPER_SCAN_ONLY: "true"
+      # Resolving is deliberately bounded so the frequent scan remains fast, but it no
+      # longer skips result reconciliation just because it is a scan-only pass.
+      PAPER_SCRAPED_SIMULATION_RESOLUTION_SYNC_LIMIT: "120"
       PAPER_REQUIRE_GEMINI: "false"
       PAPER_PRIMARY_AI_PROVIDER: gemini
     steps:

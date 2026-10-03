@@ -14347,7 +14347,10 @@ async function run() {
   }
   // Up to 300 slug lookups to settle historical rows. Housekeeping of the archive, and
   // the largest single block of waiting in a pass that only wants to place an order.
-  if (!scanOnly && !EXECUTION_PASS) {
+  // A scan-only run is still the main clock for the catalogue. It must also refresh
+  // settlement status; otherwise rows can be scanned for days after their market closed and
+  // the archival worker correctly refuses to delete an unproved result.
+  if (!EXECUTION_PASS) {
     state.marketObservations = await timed("observationResolutionSync", () =>
       refreshStoredMarketObservationResolutionStatuses(state.marketObservations || []));
   }

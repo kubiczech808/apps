@@ -12,6 +12,9 @@ const RETENTION_WORKFLOW = readFileSync(
 const SCHEMA_WORKFLOW = readFileSync(
   new URL("../../.github/workflows/trading-storage-slim-observations.yml", import.meta.url), "utf8",
 ).replace(/\r\n/g, "\n");
+const COMPACT_WORKFLOW = readFileSync(
+  new URL("../../.github/workflows/trading-compact-observations.yml", import.meta.url), "utf8",
+).replace(/\r\n/g, "\n");
 
 function body(name) {
   const start = STORAGE.indexOf(`function ${name}`);
@@ -20,33 +23,30 @@ function body(name) {
   return STORAGE.slice(start, next < 0 ? undefined : next);
 }
 
-test("fresh observation storage keeps only the trade join beside the queryable scope and payload", () => {
-  const start = STORAGE.indexOf("CREATE TABLE IF NOT EXISTS trading_observations");
-  assert.ok(start >= 0, "observation table DDL must exist");
-  const schema = STORAGE.slice(start, STORAGE.indexOf("    );", start));
-
-  for (const redundant of [
-    "source_id", "event_slug", "market_slug", "outcome_label", "market_type",
-    "observed_at", "resolved_at", "net_yield", "tags_json",
-  ]) {
-    assert.ok(!schema.includes(redundant), `${redundant} must not be projected in new rows`);
-  }
+test("fresh observation storage retains a compact operational projection without a response payload", () => {
+  const schema = body("trading_storage_compact_observations_ddl");
+  assert.match(schema, /CREATE TABLE IF NOT EXISTS/);
+  assert.doesNotMatch(schema, /payload MEDIUMBLOB/);
+  assert.doesNotMatch(schema, /source_id/);
+  assert.doesNotMatch(schema, /market_type/);
   assert.match(schema, /observation_key CHAR\(64\) CHARACTER SET ascii COLLATE ascii_bin/);
   assert.match(schema, /token_id VARCHAR\(191\) CHARACTER SET ascii COLLATE ascii_bin/,
     "the retained token joins an observation to a real trade during archival");
-  assert.match(schema, /payload_checksum CHAR\(64\) CHARACTER SET ascii COLLATE ascii_bin/);
-  assert.match(schema, /payload MEDIUMBLOB NOT NULL/);
-  assert.match(schema, /payload_checksum CHAR\(64\)/);
+  assert.match(schema, /event_slug VARCHAR\(191\)/, "a market-specific slug is retained for settlement proof");
+  assert.match(schema, /first_market_probability/, "the entry probability survives for dip and statistics logic");
+  assert.match(schema, /final_outcome_price/, "the settled outcome survives without raw Gamma data");
+  assert.match(schema, /payload_checksum BINARY\(32\)/, "the semantic checksum is stored in 32 bytes");
 });
 
 test("writes and archive restores work before and after the deliberate schema migration", () => {
   const upsert = body("trading_storage_observations_upsert");
+  const compactUpsert = body("trading_storage_compact_observations_upsert");
   const restore = body("trading_storage_restore_observation_archives_from_root");
-  assert.match(upsert, /trading_storage_observations_use_lean_schema\(\$pdo\)/);
+  assert.match(upsert, /trading_storage_observations_are_compact\(\$pdo\)/);
   assert.match(upsert, /source_id, token_id, event_slug/, "legacy writes remain supported until slim migration runs");
-  assert.match(upsert, /observation_key, lifecycle, token_id, end_at, market_probability, annualized_return, volume_usdc/,
-    "lean writes retain exactly the queryable execution scope");
-  assert.match(upsert, /payload_checksum = IF\(/, "checksum remains the terminal-update guard");
+  assert.match(compactUpsert, /trading_storage_compact_observation_bindings/);
+  assert.match(compactUpsert, /lifecycle = IF\(lifecycle = \\'RESOLVED\\'/,
+    "terminal outcomes remain terminal after the cutover");
   assert.match(restore, /trading_storage_observation_insert_ignore_statement/);
   assert.match(restore, /trading_storage_observation_statement_bindings/);
 });
@@ -123,4 +123,8 @@ test("schema rebuild stays opt-in and behind the shared-quota guard", () => {
   assert.match(SCHEMA_WORKFLOW, /rebuild-guard\.py/);
   assert.match(SCHEMA_WORKFLOW, /inputs\.confirm_slim == true/);
   assert.match(SCHEMA_WORKFLOW, /"operation": "slim-observations-schema"/);
+  assert.match(API, /\$operation === 'compact-observations-prepare'/);
+  assert.match(API, /ACTIVATE_PAYLOADLESS_OBSERVATIONS/);
+  assert.match(COMPACT_WORKFLOW, /migrate-observations-compact\.mjs/);
+  assert.match(COMPACT_WORKFLOW, /inputs\.confirm == true/);
 });
