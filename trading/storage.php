@@ -4440,6 +4440,97 @@ function trading_storage_observations_fetch(string $lifecycle, int $limit = 0, i
 }
 
 /**
+ * The official market taxonomy for a small, explicit set of traded outcomes.
+ *
+ * A paper trade's token is the same outcome token the observation catalogue stores. This is
+ * therefore an exact join, never an event-slug or question-text guess that could attach a
+ * sibling market's tags. It supports both the legacy payload schema and the compact
+ * projection so a closed-trade view works throughout the one-time migration.
+ *
+ * @return array<string, array<int, string>> token id => normalized tag slugs
+ */
+function trading_storage_observation_tags_for_tokens(array $tokenIds): array
+{
+    $pdo = trading_storage_pdo();
+    if (!$pdo instanceof PDO) {
+        return [];
+    }
+    $tokens = array_values(array_unique(array_filter(array_map(
+        static fn ($value): string => trim((string) $value),
+        $tokenIds,
+    ), static fn (string $value): bool => $value !== '' && strlen($value) <= 191)));
+    if ($tokens === []) {
+        return [];
+    }
+    trading_storage_bootstrap($pdo);
+    $schemaMode = trading_storage_observation_schema_mode($pdo);
+    $compact = $schemaMode === 'compact';
+    $result = [];
+    $tagList = static function (array $sources): array {
+        $tags = [];
+        foreach ($sources as $source) {
+            if (!is_array($source)) {
+                continue;
+            }
+            foreach ($source as $value) {
+                if (is_array($value)) {
+                    $value = $value['slug'] ?? $value['label'] ?? $value['name'] ?? '';
+                }
+                $tag = strtolower(trim((string) $value));
+                $tag = preg_replace('/[^a-z0-9_-]+/', '-', $tag) ?? '';
+                $tag = trim($tag, '-');
+                if ($tag !== '') {
+                    $tags[$tag] = true;
+                }
+            }
+        }
+        return array_keys($tags);
+    };
+    foreach (array_chunk($tokens, 250) as $chunk) {
+        $placeholders = implode(',', array_fill(0, count($chunk), '?'));
+        $columns = $compact
+            ? 'token_id, tags_json, categories_json'
+            : ($schemaMode === 'legacy' ? 'token_id, tags_json, payload' : 'token_id, payload');
+        // token_id has an index in every schema. A trade holds that exact selected outcome,
+        // so no broad event-level lookup is necessary or safe.
+        $statement = $pdo->prepare(
+            'SELECT ' . $columns . ' FROM trading_observations WHERE token_id IN (' . $placeholders . ')'
+        );
+        $statement->execute($chunk);
+        foreach ($statement->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
+            $tokenId = trim((string) ($row['token_id'] ?? ''));
+            if ($tokenId === '') {
+                continue;
+            }
+            $sources = [];
+            foreach (['tags_json', 'categories_json'] as $field) {
+                $decoded = json_decode((string) ($row[$field] ?? ''), true);
+                if (is_array($decoded)) {
+                    $sources[] = $decoded;
+                }
+            }
+            // Legacy rows have the payload as an additional fallback: a few early scans
+            // predated tags_json but did retain the Gamma event's tags in the observation.
+            if (!$compact && array_key_exists('payload', $row)) {
+                $item = trading_storage_unpack($row['payload'] ?? null);
+                if (is_array($item)) {
+                    foreach (['polymarketTags', 'derivedTags', 'tags', 'firstPolymarketTags', 'firstTags', 'polymarketCategories'] as $field) {
+                        if (is_array($item[$field] ?? null)) {
+                            $sources[] = $item[$field];
+                        }
+                    }
+                }
+            }
+            $tags = $tagList($sources);
+            if ($tags !== []) {
+                $result[$tokenId] = $tags;
+            }
+        }
+    }
+    return $result;
+}
+
+/**
  * How long an observation counts as part of the CURRENT catalogue.
  *
  * The database keeps every market it has been sent -- that history is the point of it. The

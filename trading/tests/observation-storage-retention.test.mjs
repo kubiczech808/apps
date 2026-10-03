@@ -52,6 +52,21 @@ test("writes and archive restores work before and after the deliberate schema mi
     "terminal outcomes remain terminal after the cutover");
   assert.match(restore, /trading_storage_observation_insert_ignore_statement/);
   assert.match(restore, /trading_storage_observation_statement_bindings/);
+  const tags = body("trading_storage_observation_tags_for_tokens");
+  assert.match(tags, /WHERE token_id IN/, "closed trade tag recovery joins by the selected outcome token");
+  assert.match(tags, /tags_json/, "the compact projection preserves the taxonomy it needs");
+  assert.match(tags, /trading_storage_unpack/, "legacy rows can recover tags from their historic payload");
+});
+
+test("closed paper trades enrich missing tags through an exact observation token only", () => {
+  const helperStart = API.indexOf("function paper_state_with_closed_trade_tags");
+  assert.ok(helperStart >= 0, "paper state must have a focused closed-trade tag helper");
+  const helper = API.slice(helperStart, API.indexOf("\nfunction ", helperStart + 10));
+  assert.match(helper, /trading_storage_observation_tags_for_tokens/);
+  assert.match(helper, /tokenId.*assetId/s);
+  assert.doesNotMatch(helper, /eventSlug/, "a sibling market may never donate tags to this trade");
+  assert.match(API, /compact_state_payload\([^\n]+\);\s*\$payload = paper_state_with_closed_trade_tags/s,
+    "only the focused portfolio's visible rows are enriched");
 });
 
 test("legacy stale scraped snapshots remain separately restorable and never enter settled statistics", () => {

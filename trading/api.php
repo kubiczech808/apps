@@ -1242,6 +1242,65 @@ function paper_state_with_consistent_portfolios(array $payload, string $summary,
 }
 
 /**
+ * Older paper trades kept the selected outcome and its token but not the market taxonomy.
+ * Their observations are retained in MySQL specifically because they were traded, so fill
+ * only those missing display fields through the exact outcome token. The state endpoint is
+ * read-only: this makes the history usable immediately while the paper bot's normal next
+ * write persists normalized tags for all future entries.
+ */
+function paper_state_with_closed_trade_tags(array $payload): array
+{
+    $portfolios = is_array($payload['paperPortfolios'] ?? null) ? $payload['paperPortfolios'] : [];
+    $missingTokens = [];
+    foreach ($portfolios as $portfolio) {
+        foreach (is_array($portfolio['trades'] ?? null) ? $portfolio['trades'] : [] as $trade) {
+            if (!is_array($trade) || (is_array($trade['tags'] ?? null) && $trade['tags'] !== [])) {
+                continue;
+            }
+            $tokenId = trim((string) ($trade['tokenId'] ?? $trade['assetId'] ?? ''));
+            if ($tokenId !== '') {
+                $missingTokens[$tokenId] = true;
+            }
+        }
+    }
+    if ($missingTokens === [] || !function_exists('trading_storage_observation_tags_for_tokens')) {
+        return $payload;
+    }
+    try {
+        $tagsByToken = trading_storage_observation_tags_for_tokens(array_keys($missingTokens));
+    } catch (Throwable) {
+        // A closed-trades page remains available if MySQL has a temporary issue. Its next
+        // refresh retries the enrichment; no response state is ever overwritten here.
+        return $payload;
+    }
+    foreach ($portfolios as $portfolioId => $portfolio) {
+        if (!is_array($portfolio) || !is_array($portfolio['trades'] ?? null)) {
+            continue;
+        }
+        foreach ($portfolio['trades'] as $index => $trade) {
+            if (!is_array($trade) || (is_array($trade['tags'] ?? null) && $trade['tags'] !== [])) {
+                continue;
+            }
+            $tokenId = trim((string) ($trade['tokenId'] ?? $trade['assetId'] ?? ''));
+            $tags = is_array($tagsByToken[$tokenId] ?? null) ? $tagsByToken[$tokenId] : [];
+            if ($tags === []) {
+                continue;
+            }
+            // Populate every compatibility field used by old cards and new analysis. These
+            // values originated from one exact observation token, never from a sibling event.
+            $portfolio['trades'][$index]['tags'] = $tags;
+            $portfolio['trades'][$index]['tagSlugs'] = $tags;
+            $portfolio['trades'][$index]['polymarketTags'] = $tags;
+            $portfolio['trades'][$index]['firstTags'] = $tags;
+            $portfolio['trades'][$index]['firstPolymarketTags'] = $tags;
+        }
+        $portfolios[$portfolioId] = $portfolio;
+    }
+    $payload['paperPortfolios'] = $portfolios;
+    return $payload;
+}
+
+/**
  * Dashboard shape for a saved paper portfolio before its first worker pass. The bot
  * replaces this transient shape with its fully normalized state on the next run.
  */
@@ -10665,6 +10724,7 @@ try {
         if ($target === 'paper') {
             $payload = paper_state_with_consistent_portfolios($payload, $summary, $strategyId);
             $payload = compact_state_payload($target, $payload, $summary, $strategyId, $executionOffset, $scrapedScope);
+            $payload = paper_state_with_closed_trade_tags($payload);
         }
         if ($target === 'live') {
             $payload = live_state_with_exit_reasons($payload);
