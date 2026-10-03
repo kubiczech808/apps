@@ -16,6 +16,18 @@ if ($jamu_performance_token === ''
     return;
 }
 
+// Verify the bridge can be reached on this host before running the full
+// shutdown profiler. This path is used only by the audit workflow.
+if (($_GET['jamu_bridge'] ?? '') === 'performance-audit-probe') {
+    add_action('wp_loaded', static function (): void {
+        nocache_headers();
+        header('Content-Type: application/json; charset=UTF-8', true);
+        echo wp_json_encode(['bridge' => 'performance-audit', 'reachable' => true]);
+        exit;
+    }, PHP_INT_MAX);
+    return;
+}
+
 ob_start();
 
 add_action('shutdown', static function (): void {

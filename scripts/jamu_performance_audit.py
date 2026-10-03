@@ -62,6 +62,7 @@ def main() -> int:
         for label, url in PAGES.items():
             response = session.get(
                 url,
+                params={'jamu_bridge': 'performance-audit-probe'},
                 headers={
                     # Blueboard is known to preserve this generic bridge header.
                     'X-JAMU-Bridge': token,
