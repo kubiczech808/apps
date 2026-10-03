@@ -63,6 +63,8 @@ test("closed paper trades enrich missing tags through an exact observation token
   assert.ok(helperStart >= 0, "paper state must have a focused closed-trade tag helper");
   const helper = API.slice(helperStart, API.indexOf("\nfunction ", helperStart + 10));
   assert.match(helper, /trading_storage_observation_tags_for_tokens/);
+  assert.match(helper, /paper_trade_taxonomy_fallback/,
+    "an old row whose source did not retain tags still receives a cautious market classification");
   assert.match(helper, /tokenId.*assetId/s);
   assert.doesNotMatch(helper, /eventSlug/, "a sibling market may never donate tags to this trade");
   assert.match(API, /compact_state_payload\([^\n]+\);\s*\$payload = paper_state_with_closed_trade_tags/s,

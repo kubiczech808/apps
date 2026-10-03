@@ -1241,6 +1241,43 @@ function paper_state_with_consistent_portfolios(array $payload, string $summary,
     return $payload;
 }
 
+function paper_trade_taxonomy_fallback(array $trade): array
+{
+    $identity = strtolower(implode(' ', [
+        (string) ($trade['question'] ?? ''),
+        (string) ($trade['eventSlug'] ?? $trade['slug'] ?? ''),
+        (string) ($trade['outcome'] ?? ''),
+    ]));
+    $tags = [];
+    $add = static function (string $tag) use (&$tags): void {
+        $tags[$tag] = true;
+    };
+    if (preg_match('/\b(counter[- ]?strike|cs2)\b/', $identity) === 1) {
+        $add('esports');
+        $add('counter-strike-2');
+    } elseif (preg_match('/\b(dota(?:[- ]?2)?)\b/', $identity) === 1) {
+        $add('esports');
+        $add('dota-2');
+    } elseif (preg_match('/\b(lol|league[- ]?of[- ]?legends)\b/', $identity) === 1) {
+        $add('esports');
+        $add('league-of-legends');
+    } elseif (preg_match('/\b(valorant|overwatch|rainbow[- ]?six|rocket[- ]?league)\b/', $identity) === 1) {
+        $add('esports');
+    }
+    // A named map is an esports fixture. A fight, match, head-to-head or handicap is a
+    // sports market even when an early source response omitted its event relation.
+    if (preg_match('/\bmap\b/', $identity) === 1) {
+        $add('esports');
+    }
+    if (preg_match('/\b(fight|round|match|vs\.?|handicap|spread|o\s*\/\s*u|over|under)\b/', $identity) === 1) {
+        $add('sports');
+    }
+    if (isset($tags['esports'])) {
+        $add('sports');
+    }
+    return array_keys($tags);
+}
+
 /**
  * Older paper trades kept the selected outcome and its token but not the market taxonomy.
  * Their observations are retained in MySQL specifically because they were traded, so fill
@@ -1282,7 +1319,9 @@ function paper_state_with_closed_trade_tags(array $payload): array
                 continue;
             }
             $tokenId = trim((string) ($trade['tokenId'] ?? $trade['assetId'] ?? ''));
-            $tags = is_array($tagsByToken[$tokenId] ?? null) ? $tagsByToken[$tokenId] : [];
+            $tags = is_array($tagsByToken[$tokenId] ?? null)
+                ? $tagsByToken[$tokenId]
+                : paper_trade_taxonomy_fallback($trade);
             if ($tags === []) {
                 continue;
             }
