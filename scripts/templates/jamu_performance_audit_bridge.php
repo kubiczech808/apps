@@ -161,6 +161,22 @@ add_action('shutdown', static function () use (&$jamu_plugin_loads, &$jamu_http_
 
     $htaccess = ABSPATH . '.htaccess';
     $htaccess_contents = is_readable($htaccess) ? (string) file_get_contents($htaccess) : '';
+    $asset_list = static function (mixed $assets): array {
+        if (!is_object($assets)) {
+            return [];
+        }
+        $result = [];
+        foreach ((array) ($assets->queue ?? []) as $handle) {
+            $registered = $assets->registered[$handle] ?? null;
+            $source = is_object($registered) ? (string) ($registered->src ?? '') : '';
+            $path = (string) wp_parse_url($source, PHP_URL_PATH);
+            $result[] = [
+                'handle' => (string) $handle,
+                'source' => basename($path),
+            ];
+        }
+        return $result;
+    };
     $payload = [
         'schema' => 1,
         'uri' => esc_url_raw((string) ($_SERVER['REQUEST_URI'] ?? '')),
@@ -177,6 +193,8 @@ add_action('shutdown', static function () use (&$jamu_plugin_loads, &$jamu_http_
             'scripts_enqueued' => isset($wp_scripts->queue) ? count((array) $wp_scripts->queue) : null,
             'styles_enqueued' => isset($wp_styles->queue) ? count((array) $wp_styles->queue) : null,
             'set_cookie_headers' => $set_cookie_count,
+            'scripts' => $asset_list($wp_scripts),
+            'styles' => $asset_list($wp_styles),
         ],
         'cache' => [
             'wp_cache_constant' => defined('WP_CACHE') ? (bool) WP_CACHE : false,
@@ -207,5 +225,8 @@ add_action('shutdown', static function () use (&$jamu_plugin_loads, &$jamu_http_
     nocache_headers();
     header('Content-Type: application/json; charset=UTF-8', true);
     echo wp_json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    // Do not let the page-cache shutdown callback append an HTML diagnostic
+    // comment to the JSON-only audit response.
+    exit;
 // Run before WordPress flushes output buffers at shutdown priority 1.
 }, 0);
