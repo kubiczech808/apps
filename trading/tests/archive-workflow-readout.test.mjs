@@ -159,8 +159,10 @@ test("the fold check refuses a run that lost settlements", () => {
   const start = WORKFLOW.indexOf("<<'PY'", WORKFLOW.indexOf("Check the statistics still see"));
   const check = WORKFLOW.slice(start, WORKFLOW.indexOf("\n          PY\n", start));
   assert.match(check, /"operation": "refresh-resolved-stats"/);
-  assert.match(check, /if priced < 70000:/,
-    "77,553 priced settlements was the count before archiving; it must not fall");
+  assert.match(check, /PRICED_BASELINE/,
+    "the check must use the fold immediately before this archive run, not a stale constant");
+  assert.match(check, /if priced < baseline:/,
+    "priced settlements must never fall below the exact pre-archive baseline");
   assert.match(check, /raise SystemExit/);
   assert.match(check, /result\.get\("priced"\)/,
     "read from the response's own keys -- 'rows' and 'combinations' were both wrong before");

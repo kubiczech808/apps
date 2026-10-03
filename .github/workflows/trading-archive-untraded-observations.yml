@@ -90,7 +90,7 @@ jobs:
           if not int(plan.get("tradeTokens") or 0):
               raise SystemExit("STOP: trade mirror has no token identities; refusing archival.")
 
-          archived = verified = deleted = 0
+          archived = verified = deleted = terminal_reconciled = 0
           done = False
           for index in range(batches):
               response = call({
@@ -105,10 +105,12 @@ jobs:
               archived += batch_archived
               verified += batch_verified
               deleted += batch_deleted
+              terminal_reconciled += int(batch.get("terminalReconciled") or 0)
               print(
                   f"batch {index + 1}: archived {batch_archived}, verified {batch_verified}, "
                   f"deleted {batch_deleted}, remaining {batch.get('remaining')}, "
-                  f"protected {batch.get('protectedRows')}, "
+                  f"protected {batch.get('protectedRows')}, terminal repaired "
+                  f"{batch.get('terminalReconciled')}, "
                   f"{(batch.get('bytes') or 0) / 1048576:.1f} MB -> {batch.get('file')}"
               )
               if batch_deleted != batch_verified or batch_archived != batch_verified:
@@ -119,7 +121,10 @@ jobs:
 
           after = footprint()
           after_plan = call({"operation": "traded-observation-retention-plan", "keepDays": keep_days})
-          print(f"archived {archived}, verified {verified}, deleted {deleted}, done={done}")
+          print(
+              f"archived {archived}, verified {verified}, deleted {deleted}, "
+              f"terminal repaired {terminal_reconciled}, done={done}"
+          )
           print("After:", json.dumps(after))
           print("After plan:", json.dumps(after_plan.get("plan") or {}))
           PY

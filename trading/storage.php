@@ -2364,6 +2364,7 @@ function trading_storage_archive_untraded_observations(PDO $pdo, int $limit = 20
             'archived' => 0,
             'verified' => 0,
             'deleted' => 0,
+            'terminalReconciled' => 0,
             'file' => null,
             'bytes' => 0,
             'remaining' => 0,
@@ -2393,6 +2394,7 @@ function trading_storage_archive_untraded_observations(PDO $pdo, int $limit = 20
             'archived' => 0,
             'verified' => 0,
             'deleted' => 0,
+            'terminalReconciled' => 0,
             'file' => null,
             'bytes' => 0,
             'remaining' => 0,
@@ -2416,6 +2418,7 @@ function trading_storage_archive_untraded_observations(PDO $pdo, int $limit = 20
 
     $keys = [];
     $written = 0;
+    $terminalReconciled = 0;
     foreach ($rows as $row) {
         $key = (string) ($row['observation_key'] ?? '');
         $payload = trading_storage_unpack($row['payload'] ?? null);
@@ -2423,9 +2426,21 @@ function trading_storage_archive_untraded_observations(PDO $pdo, int $limit = 20
             // The source row stays in MySQL when its recovery copy cannot be reconstructed.
             continue;
         }
+        $archiveLifecycle = strtoupper(trim((string) ($row['lifecycle'] ?? 'SCRAPED')));
+        // A terminal Gamma payload may have been persisted immediately before its lifecycle
+        // update was interrupted. This row is being removed from MySQL, so make the durable
+        // archive carry the settled lifecycle before deletion. The statistics fold reads
+        // RESOLVED archive rows and will therefore retain this result instead of treating it
+        // as a disposable scrape snapshot.
+        if ($archiveLifecycle === 'SCRAPED' && trading_storage_payload_proves_resolved($payload)) {
+            $archiveLifecycle = 'RESOLVED';
+            $payload['status'] = 'RESOLVED';
+            $payload['selectionStatus'] = 'RESOLVED';
+            $terminalReconciled++;
+        }
         $line = json_encode([
             'observationKey' => $key,
-            'lifecycle' => (string) ($row['lifecycle'] ?? 'SCRAPED'),
+            'lifecycle' => $archiveLifecycle,
             'tokenId' => (string) ($row['token_id'] ?? ''),
             'updatedAt' => (string) ($row['updated_at'] ?? ''),
             'payload' => $payload,
@@ -2464,6 +2479,7 @@ function trading_storage_archive_untraded_observations(PDO $pdo, int $limit = 20
         'archived' => $written,
         'verified' => $verified,
         'deleted' => $deleted,
+        'terminalReconciled' => $terminalReconciled,
         'file' => str_replace(__DIR__ . '/', '', $path),
         'bytes' => (int) (@filesize($path) ?: 0),
         'remaining' => (int) $remainingPlan['archivableRows'],

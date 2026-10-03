@@ -114,6 +114,41 @@ jobs:
               handle.write(f"reconciled={reconciled}\\n")
           PY
 
+      - name: Capture the current resolved-statistics baseline
+        id: baseline
+        env:
+          TRADING_TRIGGER_KEY: ${{ secrets.POLYTRADING_DB_PASSWORD }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+
+          request = urllib.request.Request(
+              "https://www.osobnizkusenosti.cz/trading/api.php?action=storage-admin",
+              data=json.dumps({"operation": "resolved-stats-status"}).encode("utf-8"),
+              method="POST",
+              headers={"Content-Type": "application/json", "X-Trading-Trigger-Key": os.environ["TRADING_TRIGGER_KEY"]},
+          )
+          try:
+              with urllib.request.urlopen(request, timeout=180) as response:
+                  payload = json.loads(response.read().decode("utf-8"))
+          except urllib.error.HTTPError as error:
+              raise SystemExit(f"HTTP {error.code}: {error.read().decode('utf-8', 'replace')[:600]}")
+
+          stats = payload.get("stats") if payload.get("ok") else None
+          if not isinstance(stats, dict) or int(stats.get("priced") or 0) <= 0:
+              raise SystemExit(
+                  "STOP: there is no successful resolved-statistics fold to protect; "
+                  "nothing was archived."
+              )
+          priced = int(stats["priced"])
+          print("Baseline:", json.dumps(stats))
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as handle:
+              handle.write(f"priced={priced}\\n")
+          PY
+
       - name: Archive settled observations, verifying before each delete
         id: archive
         env:
@@ -235,6 +270,7 @@ jobs:
         if: ${{ always() && steps.archive.outputs.archived != '0' }}
         env:
           TRADING_TRIGGER_KEY: ${{ secrets.POLYTRADING_DB_PASSWORD }}
+          PRICED_BASELINE: ${{ steps.baseline.outputs.priced }}
         run: |
           python3 - <<'PY'
           import json
@@ -246,8 +282,8 @@ jobs:
           # from scratch, so if it cannot read the archive back, the first successful batch
           # shrinks the Setup finder -- silently, to a smaller number that still renders.
           #
-          # 77,553 priced settlements was the count with every row still in MySQL. After
-          # archiving it must not fall.
+          # Compare against the successful fold immediately before archival. A fixed historic
+          # number becomes false as source quality improves, but this baseline must never fall.
           key = os.environ["TRADING_TRIGGER_KEY"]
           request = urllib.request.Request(
               "https://www.osobnizkusenosti.cz/trading/api.php?action=storage-admin",
@@ -269,9 +305,12 @@ jobs:
           for source in (result.get("sources") or []):
               print("  source:", json.dumps(source)[:300])
 
-          if priced < 70000:
+          baseline = int(os.environ.get("PRICED_BASELINE") or 0)
+          if baseline <= 0:
+              raise SystemExit("STOP: no valid pre-archive priced baseline was supplied.")
+          if priced < baseline:
               raise SystemExit(
-                  f"STOP: only {priced} priced settlements reached the fold, against 77,553 "
-                  "before any archiving. The archive is not being read back."
+                  f"STOP: only {priced} priced settlements reached the fold, below the "
+                  f"pre-archive baseline of {baseline}. The archive is not being read back."
               )
           PY

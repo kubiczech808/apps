@@ -80,6 +80,10 @@ test("trade-aware retention keeps actual positions and archives only old non-tra
     "the selected rows must have no durable trade-token match");
   assert.match(archive, /WHERE t\.token_id IS NULL/,
     "only observations without that real-trade token may be selected");
+  assert.match(archive, /trading_storage_payload_proves_resolved\(\$payload\)/,
+    "a terminal payload with an interrupted SCRAPED lifecycle must become RESOLVED in the archive");
+  assert.match(archive, /'terminalReconciled' => \$terminalReconciled/,
+    "the archival result must disclose how many terminal snapshots it repaired");
   assert.match(archive, /DELETE o FROM trading_observations o/,
     "delete must repeat the predicate instead of trusting an earlier select");
   assert.match(archive, /trading_storage_count_archived_rows\(\$path\)/,
@@ -104,6 +108,8 @@ test("trade-aware retention is scheduled, rate-limited, and survives deploy clea
     "the schedule must refuse a destructive empty-trade-mirror run");
   assert.match(RETENTION_WORKFLOW, /batch_deleted != batch_verified or batch_archived != batch_verified/,
     "a partial archive may not claim success");
+  assert.match(RETENTION_WORKFLOW, /terminal repaired/,
+    "maintenance output must disclose stale terminal snapshots repaired while archiving");
   assert.match(DEPLOY, /"untraded-observation-archive"/,
     "deployment cleanup must retain the trade-aware recovery archive");
   assert.match(DEPLOY, /"scraped-observation-archive"/,

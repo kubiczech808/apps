@@ -36,3 +36,11 @@ test("the scheduled archive reconciles stale terminal rows first and keeps a sev
   assert.match(WORKFLOW, /"operation": "reconcile-resolved-observations"/);
   assert.match(WORKFLOW, /KEEP_DAYS: \$\{\{ github\.event\.inputs\.keep_days \|\| '7' \}\}/);
 });
+
+test("resolved archival protects the exact current statistics fold rather than a stale historic count", () => {
+  assert.match(API, /\$operation === 'resolved-stats-status'/);
+  assert.match(API, /trading_storage_resolved_stats_load\(\$pdo\)/);
+  assert.match(WORKFLOW, /"operation": "resolved-stats-status"/);
+  assert.match(WORKFLOW, /PRICED_BASELINE/);
+  assert.match(WORKFLOW, /if priced < baseline:/);
+});

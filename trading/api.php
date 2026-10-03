@@ -8604,6 +8604,22 @@ try {
                 'indexes' => trading_storage_index_inventory($pdo),
             ]);
         }
+        // Read the last successful fold without scanning the archive again. Archival compares
+        // its rebuilt result to this exact baseline, so retention cannot silently shrink the
+        // statistics when the historical population differs from an old hard-coded count.
+        if ($operation === 'resolved-stats-status') {
+            $stored = trading_storage_resolved_stats_load($pdo);
+            respond([
+                'ok' => true,
+                'operation' => 'resolved-stats-status',
+                'stats' => $stored === null ? null : [
+                    'foldedAt' => (string) ($stored['foldedAt'] ?? ''),
+                    'scanned' => (int) ($stored['scanned'] ?? 0),
+                    'priced' => (int) ($stored['priced'] ?? 0),
+                    'cells' => count($stored['cells'] ?? []) + count($stored['anyTag'] ?? []),
+                ],
+            ]);
+        }
         // Read-only. How much of each table is content and how much is empty space inside
         // its pages -- the one thing information_schema cannot report on its own. See
         // trading_storage_row_density.
