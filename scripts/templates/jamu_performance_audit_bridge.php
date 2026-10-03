@@ -117,5 +117,6 @@ add_action('shutdown', static function (): void {
     nocache_headers();
     header('Content-Type: application/json; charset=UTF-8', true);
     echo wp_json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-}, PHP_INT_MAX);
+// Run before WordPress flushes output buffers at shutdown priority 1.
+}, 0);
 
