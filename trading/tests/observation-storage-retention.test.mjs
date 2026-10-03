@@ -15,6 +15,9 @@ const SCHEMA_WORKFLOW = readFileSync(
 const COMPACT_WORKFLOW = readFileSync(
   new URL("../../.github/workflows/trading-compact-observations.yml", import.meta.url), "utf8",
 ).replace(/\r\n/g, "\n");
+const COMPACT_MIGRATION = readFileSync(
+  new URL("../tools/migrate-observations-compact.mjs", import.meta.url), "utf8",
+).replace(/\r\n/g, "\n");
 
 function body(name) {
   const start = STORAGE.indexOf(`function ${name}`);
@@ -127,4 +130,6 @@ test("schema rebuild stays opt-in and behind the shared-quota guard", () => {
   assert.match(API, /ACTIVATE_PAYLOADLESS_OBSERVATIONS/);
   assert.match(COMPACT_WORKFLOW, /migrate-observations-compact\.mjs/);
   assert.match(COMPACT_WORKFLOW, /inputs\.confirm == true/);
+  assert.match(COMPACT_MIGRATION, /attempt <= 5/,
+    "a brief shared-hosting disconnect cannot abandon a verified long-running copy");
 });

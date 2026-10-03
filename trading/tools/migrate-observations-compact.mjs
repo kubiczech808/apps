@@ -7,17 +7,29 @@ const maxBatches = Math.max(1, Math.min(2000, Number(process.env.COMPACT_MIGRATI
 if (!url || !key) throw new Error("TRADING_STORAGE_ADMIN_URL and TRADING_TRIGGER_KEY are required.");
 
 async function call(operation, input = {}) {
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Trading-Trigger-Key": key },
-    body: JSON.stringify({ operation, ...input }),
-    signal: AbortSignal.timeout(120_000),
-  });
-  const text = await response.text();
-  let json = null;
-  try { json = JSON.parse(text); } catch { /* error below */ }
-  if (!response.ok || !json?.ok) throw new Error(json?.error || `${operation}: HTTP ${response.status}`);
-  return json;
+  let lastError = null;
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Trading-Trigger-Key": key },
+        body: JSON.stringify({ operation, ...input }),
+        signal: AbortSignal.timeout(120_000),
+      });
+      const text = await response.text();
+      let json = null;
+      try { json = JSON.parse(text); } catch { /* error below */ }
+      if (!response.ok || !json?.ok) throw new Error(json?.error || `${operation}: HTTP ${response.status}`);
+      return json;
+    } catch (error) {
+      lastError = error;
+      if (attempt === 5) break;
+      const delay = attempt * 1_000;
+      console.warn(`${operation} attempt ${attempt} failed; retrying in ${delay}ms: ${error.message}`);
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+  throw lastError;
 }
 
 const prepared = await call("compact-observations-prepare");
