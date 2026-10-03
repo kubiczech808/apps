@@ -161,6 +161,10 @@ add_action('shutdown', static function () use (&$jamu_plugin_loads, &$jamu_http_
 
     $htaccess = ABSPATH . '.htaccess';
     $htaccess_contents = is_readable($htaccess) ? (string) file_get_contents($htaccess) : '';
+    $opcache_status = function_exists('opcache_get_status') ? @opcache_get_status(false) : false;
+    $opcache_statistics = is_array($opcache_status) && is_array($opcache_status['opcache_statistics'] ?? null)
+        ? $opcache_status['opcache_statistics']
+        : [];
     $asset_list = static function (mixed $assets): array {
         if (!is_object($assets)) {
             return [];
@@ -211,6 +215,15 @@ add_action('shutdown', static function () use (&$jamu_plugin_loads, &$jamu_http_
             'autoloaded_options_bytes' => $autoload_bytes,
             'recorded_query_seconds' => round($query_total_seconds, 3),
             'slow_callers' => $slow_query_callers,
+        ],
+        'php' => [
+            'version' => PHP_VERSION,
+            'included_files' => count(get_included_files()),
+            'opcache_ini_enabled' => (string) ini_get('opcache.enable'),
+            'opcache_active' => is_array($opcache_status),
+            'opcache_cached_scripts' => isset($opcache_statistics['num_cached_scripts']) ? (int) $opcache_statistics['num_cached_scripts'] : null,
+            'opcache_hits' => isset($opcache_statistics['hits']) ? (int) $opcache_statistics['hits'] : null,
+            'opcache_misses' => isset($opcache_statistics['misses']) ? (int) $opcache_statistics['misses'] : null,
         ],
         'runtime' => [
             'slow_plugin_load_intervals' => array_slice($jamu_plugin_loads, 0, 12),
