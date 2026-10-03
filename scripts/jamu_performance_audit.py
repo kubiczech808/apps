@@ -91,6 +91,8 @@ def main() -> int:
                         marker in sample.lower()
                         for marker in ('fatal error', 'parse error', 'warning:', 'uncaught')
                     ),
+                    'body_prefix': sample.replace('\r', ' ').replace('\n', ' ')[:240],
+                    'body_suffix': response.text[-240:].replace('\r', ' ').replace('\n', ' ') if response.content else '',
                 }
 
         # This is a temporary anonymous WooCommerce session only. It creates
@@ -120,11 +122,14 @@ def main() -> int:
             result['pages']['cart_with_item_en'] = cart_response.json()
             result['pages']['cart_with_item_en']['add_to_cart_status'] = added.status_code
         except (requests.RequestException, ValueError) as exc:
+            sample = cart_response.text[:500] if cart_response.content else ''
             result['pages']['cart_with_item_en'] = {
                 'audit_error': type(exc).__name__,
                 'add_to_cart_status': added.status_code,
                 'http_status': cart_response.status_code,
                 'body_bytes': len(cart_response.content),
+                'body_prefix': sample.replace('\r', ' ').replace('\n', ' ')[:240],
+                'body_suffix': cart_response.text[-240:].replace('\r', ' ').replace('\n', ' ') if cart_response.content else '',
             }
         output = Path('jamu-content/performance-audit.json')
         output.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')

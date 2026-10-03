@@ -68,7 +68,23 @@ add_action('http_api_debug', static function (mixed $response, string $context, 
     unset($jamu_http_started[$url]);
 }, PHP_INT_MAX, 5);
 
-add_action('shutdown', static function () use (&$jamu_plugin_loads, &$jamu_http_calls): void {
+// WordPress does not expose per-hook timing without a profiler. This records
+// only intervals over 20 ms between hook boundaries for this one request. It
+// contains hook names and durations, never the hook arguments.
+$jamu_last_hook = null;
+$jamu_last_hook_started = microtime(true);
+$jamu_slow_hook_intervals = [];
+add_action('all', static function (string $hook) use (&$jamu_last_hook, &$jamu_last_hook_started, &$jamu_slow_hook_intervals): void {
+    $now = microtime(true);
+    $milliseconds = ($now - $jamu_last_hook_started) * 1000;
+    if ($jamu_last_hook !== null && $milliseconds >= 20) {
+        $jamu_slow_hook_intervals[] = ['after_hook' => $jamu_last_hook, 'milliseconds' => round($milliseconds, 1)];
+    }
+    $jamu_last_hook = $hook;
+    $jamu_last_hook_started = $now;
+}, PHP_INT_MIN, 1);
+
+add_action('shutdown', static function () use (&$jamu_plugin_loads, &$jamu_http_calls, &$jamu_last_hook, &$jamu_last_hook_started, &$jamu_slow_hook_intervals): void {
     global $wpdb, $wp_scripts, $wp_styles, $wp_object_cache;
 
     $num_queries = isset($wpdb->num_queries) ? (int) $wpdb->num_queries : null;
@@ -137,6 +153,11 @@ add_action('shutdown', static function () use (&$jamu_plugin_loads, &$jamu_http_
     }
     usort($jamu_plugin_loads, static fn (array $left, array $right): int => $right['milliseconds'] <=> $left['milliseconds']);
     usort($jamu_http_calls, static fn (array $left, array $right): int => ($right['milliseconds'] ?? 0) <=> ($left['milliseconds'] ?? 0));
+    $final_hook_milliseconds = (microtime(true) - $jamu_last_hook_started) * 1000;
+    if ($jamu_last_hook !== null && $final_hook_milliseconds >= 20) {
+        $jamu_slow_hook_intervals[] = ['after_hook' => $jamu_last_hook, 'milliseconds' => round($final_hook_milliseconds, 1)];
+    }
+    usort($jamu_slow_hook_intervals, static fn (array $left, array $right): int => $right['milliseconds'] <=> $left['milliseconds']);
 
     $htaccess = ABSPATH . '.htaccess';
     $htaccess_contents = is_readable($htaccess) ? (string) file_get_contents($htaccess) : '';
@@ -176,6 +197,7 @@ add_action('shutdown', static function () use (&$jamu_plugin_loads, &$jamu_http_
         'runtime' => [
             'slow_plugin_load_intervals' => array_slice($jamu_plugin_loads, 0, 12),
             'http_calls' => array_slice($jamu_http_calls, 0, 12),
+            'slow_hook_intervals' => array_slice($jamu_slow_hook_intervals, 0, 20),
         ],
     ];
 
