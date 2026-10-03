@@ -288,10 +288,16 @@ test("a trade keeps the market's tags, so the profit can be attributed to them",
     "the trade must carry the market's tags, not just whichever field happened to be set");
   assert.ok(trade.tagSlugs.includes("esports"), `expected esports in ${JSON.stringify(trade.tagSlugs)}`);
   assert.ok(trade.tagSlugs.includes("cs2"));
+  assert.deepEqual(trade.tags, trade.tagSlugs,
+    "the legacy tags field stays populated for closed-trade readers as well");
 
   // And the analysis has to read them, or storing them changes nothing.
   assert.ok(tradeTags(trade).includes("cs2"),
     "the breakdown must read the field the trade actually writes");
+
+  const app = readFileSync(new URL("../assets/app.js", import.meta.url), "utf8");
+  assert.match(app, /trade\?\.tagSlugs/,
+    "the closed-trades tag popover must also read historical tagSlugs");
 
   // A market genuinely without tags still reports as untagged rather than disappearing:
   // how much profit carries no tag is part of the answer.

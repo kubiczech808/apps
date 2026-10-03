@@ -34,6 +34,22 @@ test("economics: a persisted fee market keeps its taker rate during revalidation
   });
 });
 
+test("paper trade normalization repairs a historical tagSlugs-only closed row", () => {
+  // Older closed trades already retained the taxonomy used by portfolio filters, but only
+  // under tagSlugs. The closed-trades view and future persistence both need the canonical
+  // tags field populated too.
+  const trade = bot.normalizeTrade({
+    id: "historic-tags-only",
+    status: "WON",
+    tokenId: "historic-token",
+    question: "Counter-Strike: Team A vs Team B",
+    tagSlugs: ["esports", "counter-strike-2", "sports"],
+    totalCostUsdc: 5,
+  });
+  assert.deepEqual(trade.tags, ["esports", "counter-strike-2", "sports"]);
+  assert.deepEqual(trade.tagSlugs, trade.tags);
+});
+
 test("paper maintenance: a final fifty-cent refund releases a disabled portfolio position", async () => {
   // A closed market at 0.50/0.50 is a refund only once Gamma has confirmed UMA
   // resolution. Before that confirmation it must remain pending, never be guessed.

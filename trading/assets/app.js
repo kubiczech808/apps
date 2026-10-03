@@ -17119,8 +17119,8 @@ function portfolioAnalysisTags(trade) {
   const tags = new Set();
   const source = trade?.sourceEvaluation || {};
   for (const values of [
-    trade?.polymarketTags, trade?.derivedTags, trade?.tags, trade?.firstPolymarketTags,
-    source?.polymarketTags, source?.derivedTags, source?.tags, source?.firstPolymarketTags,
+    trade?.polymarketTags, trade?.derivedTags, trade?.tags, trade?.tagSlugs, trade?.firstPolymarketTags,
+    source?.polymarketTags, source?.derivedTags, source?.tags, source?.tagSlugs, source?.firstPolymarketTags,
   ]) {
     for (const value of (Array.isArray(values) ? values : [])) {
       const tag = portfolioAnalysisTag(value);

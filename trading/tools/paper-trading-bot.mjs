@@ -4202,12 +4202,18 @@ function normalizeLearningProfile(profile = {}) {
 
 function normalizeTrade(trade) {
   if (!trade || typeof trade !== "object") return trade;
+  // `tagSlugs` became the durable, filter-compatible taxonomy for a paper trade, while
+  // older closed rows retained an empty legacy `tags` field. Normalise both directions:
+  // the dashboard can render historical rows today and the next state write repairs the
+  // legacy field permanently. rowTagSlugs is deliberately the same reader that decided
+  // whether this trade was allowed into the portfolio in the first place.
+  const taxonomyTags = [...rowTagSlugs(trade)];
   const risk = riskProfile({
     question: trade.question,
     slug: trade.slug,
     eventSlug: trade.eventSlug,
     outcome: trade.outcome,
-    tags: trade.tags,
+    tags: taxonomyTags,
   });
   const existingRiskKeys = Array.isArray(trade.riskGroupKeys) ? trade.riskGroupKeys : [];
   const existingRiskLabels = Array.isArray(trade.riskGroupLabels) ? trade.riskGroupLabels : [];
@@ -4226,6 +4232,10 @@ function normalizeTrade(trade) {
   );
   return {
     ...trade,
+    ...(taxonomyTags.length ? {
+      tags: taxonomyTags,
+      tagSlugs: taxonomyTags,
+    } : {}),
     status: historicalStopGap ? "STOP_GAP" : (trade.status || "OPEN"),
     totalCostUsdc: Number(trade.totalCostUsdc || trade.maxLossUsdc || trade.stakeUsdc || 0),
     aiAnalysis: trade.aiAnalysis || {
@@ -8520,6 +8530,7 @@ const TAG_FIELDS = [
   "polymarketTags",
   "derivedTags",
   "tags",
+  "tagSlugs",
   "firstPolymarketTags",
   "firstTags",
   "polymarketCategories",
@@ -9321,6 +9332,10 @@ function paperTradeFromCandidate(best, strategy, today, stake) {
   const selectedExpectedValue = Number.isFinite(selectionEconomics.expectedValueUsdc)
     ? Number((selectionEconomics.expectedValueUsdc * economics.scale).toFixed(4))
     : null;
+  // A candidate can expose the same market taxonomy through several Gamma fields. Keep
+  // the union the portfolio filters evaluated, so a closed trade is self-describing even
+  // after its source observation has been archived.
+  const taxonomyTags = [...rowTagSlugs(best)];
   // A dip entry has two prices that must never be conflated: the price that caused the
   // watch to exist, and the price actually paid at the collapse. Persist both with their
   // timestamps. Until this was stored, a closed trade only showed its 30-60% entry and
@@ -9372,7 +9387,7 @@ function paperTradeFromCandidate(best, strategy, today, stake) {
     eventSlug: best.eventSlug,
     outcome: best.outcome,
     tokenId: best.tokenId,
-    tags: best.tags,
+    tags: taxonomyTags,
     // The market's tags as every filter in this file reads them, kept WITH the trade.
     //
     // `tags` above is one field of several; a scraped row carries its real Polymarket tags
@@ -9387,7 +9402,7 @@ function paperTradeFromCandidate(best, strategy, today, stake) {
     // Spread, because rowTagSlugs returns a Set and a Set serialises to {} -- the trade
     // would have been published carrying an empty object where its tags should be, which is
     // indistinguishable from the untagged state this exists to fix.
-    tagSlugs: [...rowTagSlugs(best)],
+    tagSlugs: taxonomyTags,
     riskCategory: best.riskCategory,
     riskPrimaryEntity: best.riskPrimaryEntity,
     riskGroupKeys: best.riskGroupKeys,
@@ -14761,6 +14776,7 @@ export {
   strategyEligibleCandidates,
   strategyMatchesExecutionTrigger,
   normalizeCadence,
+  normalizeTrade,
   normalizeState,
   normalizePaperPortfolioArchives,
   archiveAndResetPaperPortfolio,
