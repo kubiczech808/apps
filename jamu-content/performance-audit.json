@@ -1,0 +1,37 @@
+{
+  "schema": 1,
+  "pages": {
+    "home": {
+      "audit_error": "JSONDecodeError",
+      "http_status": 200,
+      "content_type": "text/html; charset=UTF-8",
+      "body_bytes": 304295,
+      "starts_with_html": true,
+      "contains_php_error": false
+    },
+    "product_en": {
+      "audit_error": "JSONDecodeError",
+      "http_status": 200,
+      "content_type": "text/html; charset=UTF-8",
+      "body_bytes": 387140,
+      "starts_with_html": true,
+      "contains_php_error": false
+    },
+    "cart_en": {
+      "audit_error": "JSONDecodeError",
+      "http_status": 200,
+      "content_type": "text/html; charset=UTF-8",
+      "body_bytes": 537346,
+      "starts_with_html": true,
+      "contains_php_error": false
+    },
+    "checkout_en": {
+      "audit_error": "JSONDecodeError",
+      "http_status": 200,
+      "content_type": "text/html; charset=UTF-8",
+      "body_bytes": 537334,
+      "starts_with_html": true,
+      "contains_php_error": false
+    }
+  }
+}
