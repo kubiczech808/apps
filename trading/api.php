@@ -6721,18 +6721,26 @@ function live_dip_entry_watch_payload(): array
     // time -- so it is decided here, while there is time to be careful about it.
     $heldTokens = [];
     $heldConditions = [];
-    foreach ([$live['positions'] ?? [], $live['openOrders'] ?? []] as $rows) {
+    // A position takes precedence when a delayed exchange snapshot temporarily exposes
+    // both a filled position and its now-stale order. The dashboard can then say exactly
+    // what prevents entry instead of calling both cases "already held".
+    foreach ([
+        ['kind' => 'position', 'rows' => $live['positions'] ?? []],
+        ['kind' => 'order', 'rows' => $live['openOrders'] ?? []],
+    ] as $entry) {
+        $kind = $entry['kind'];
+        $rows = $entry['rows'];
         foreach (is_array($rows) ? $rows : [] as $row) {
             if (!is_array($row)) {
                 continue;
             }
             $token = live_row_token_id($row);
-            if ($token !== '') {
-                $heldTokens[$token] = true;
+            if ($token !== '' && !isset($heldTokens[$token])) {
+                $heldTokens[$token] = $kind;
             }
             $condition = trim((string) ($row['conditionId'] ?? ''));
-            if ($condition !== '') {
-                $heldConditions[$condition] = true;
+            if ($condition !== '' && !isset($heldConditions[$condition])) {
+                $heldConditions[$condition] = $kind;
             }
         }
     }
@@ -6828,11 +6836,18 @@ function live_dip_entry_watch_payload(): array
             // opens the simulated position, and borrowing the wallet's here would refuse a
             // paper entry because some live portfolio happens to hold the market.
             $blocked = '';
+            $blockedKind = '';
             if ($entry['accountType'] === 'live') {
                 if (isset($heldTokens[$tokenId])) {
-                    $blocked = 'the wallet already holds or has a resting order on this token';
+                    $blockedKind = $heldTokens[$tokenId];
+                    $blocked = $blockedKind === 'order'
+                        ? 'an order is already placed for this outcome'
+                        : 'the wallet already holds this position';
                 } elseif ($conditionId !== '' && isset($heldConditions[$conditionId])) {
-                    $blocked = 'the wallet already has a position in this market';
+                    $blockedKind = $heldConditions[$conditionId];
+                    $blocked = $blockedKind === 'order'
+                        ? 'an order is already placed in this market'
+                        : 'the wallet already holds a position in this market';
                 }
             }
             if ($blocked !== '') {
@@ -6897,6 +6912,7 @@ function live_dip_entry_watch_payload(): array
                 // Empty means clear to fire. Published rather than filtered out, so the
                 // worker's log can say why a watched market was not bought.
                 'blockedReason' => $blocked,
+                'blockedKind' => $blockedKind,
                 'preparedAt' => gmdate('c'),
             ];
             $diagnostics['portfolios'][$portfolioId]['plans']++;

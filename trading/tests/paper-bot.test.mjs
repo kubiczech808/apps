@@ -2242,7 +2242,9 @@ test("candidates: the precheck column has no WAITING state", async () => {
   assert.match(precheckAssignment, /"EXCLUDED"/);
   assert.match(precheckAssignment, /"RISK-BLOCKED"/);
   assert.match(precheckAssignment, /"READY"/);
-  assert.match(precheckAssignment, /"ALREADY HELD"/);
+  assert.match(precheckAssignment, /candidateAlreadyHeldPrecheck\(item\)/);
+  assert.match(app, /return "ORDER PLACED"/);
+  assert.match(app, /return "POSITION HELD"/);
   assert.doesNotMatch(precheckAssignment, /WAITING/, "a retryable verdict must not render as its own precheck state");
 
   // The retention rule must survive: a temporary block keeps the row in the shortlist so
@@ -5421,14 +5423,19 @@ test("5050: candidates on an event already working are risk-blocked", async () =
   const pick = (re) => re.exec(app)[0];
   const body = [
     "const inferredRiskKeysForRow = () => [];",
+    "const isOpenOrderTrade = (trade = {}) => trade.mode === \"LIVE_ORDER\" || String(trade.status || \"\").toUpperCase() === \"LIMIT_ORDER_WAITING\";",
     pick(/function riskKeysForRow\([\s\S]*?\n\}/),
+    pick(/function candidateExposureKind\([\s\S]*?\n\}/),
+    pick(/function candidateExistingExposureKind\([\s\S]*?\n\}/),
     pick(/function candidateRiskBlockReason\([\s\S]*?\n\}/),
   ].join("\n");
   const reason = new Function("item", "activeRows", `${body}
     return candidateRiskBlockReason(item, activeRows, new Map());`);
-  const wallet = [{ tokenId: "A1", riskGroupKeys: ["event:matchA", "match:a"] }];
+  const wallet = [{ tokenId: "A1", candidateExposureKind: "position", riskGroupKeys: ["event:matchA", "match:a"] }];
 
-  assert.match(reason({ tokenId: "A1", riskGroupKeys: ["event:matchA"] }, wallet), /duplicate token already open/);
+  assert.match(reason({ tokenId: "A1", riskGroupKeys: ["event:matchA"] }, wallet), /position held for this market/);
+  assert.match(reason({ tokenId: "A1" }, [{ tokenId: "A1", candidateExposureKind: "order" }]), /order placed for this market/,
+    "a resting order must not be labelled as a held position");
   assert.match(reason({ tokenId: "A2", riskGroupKeys: ["event:matchA", "match:a"] }, wallet),
     /same event or match already open/, "a sibling sub-market must block on the event key");
   assert.equal(reason({ tokenId: "B1", riskGroupKeys: ["event:matchB"] }, wallet), "",
@@ -5458,7 +5465,9 @@ test("execution candidates: an already held market is labelled, not removed", as
   assert.match(app, /alreadyHeld: sortPortfolioCandidates\(alreadyHeld, mode\),/);
   assert.match(app, /const visibleRows = \[\.\.\.rows, \.\.\.riskBlocked, \.\.\.manuallyExcluded, \.\.\.alreadyHeld\];/,
     "held markets are listed after the available ones, not dropped");
-  assert.match(app, /heldRow \? "ALREADY HELD"/, "and carry a state of their own, not READY");
+  assert.match(app, /heldRow \? candidateAlreadyHeldPrecheck\(item\)/, "and carry a state of their own, not READY");
+  assert.match(app, /return "ORDER PLACED"/, "a resting order gets its own candidate badge");
+  assert.match(app, /return "POSITION HELD"/, "a filled position gets its own candidate badge");
   // Counted, or the total would disagree with the rows on screen.
   assert.match(app, /state\.candidateTotalCount = rows\.length \+ blocked \+ excluded \+ held;/);
   assert.match(app, /already held/, "the summary names them");
@@ -5472,6 +5481,8 @@ test("execution candidates: an already held market is labelled, not removed", as
   assert.match(app, /!dipWatchPlanHasTerminalEntry\(plan\) \|\| Boolean\(dipWatchPlanAlreadyHeldReason\(plan\)\)/,
     "a terminal DIP plan stays visible when its only terminal reason is an existing wallet position");
   assert.match(app, /const alreadyHeldReason = dipWatchPlanAlreadyHeldReason\(plan\);/);
+  assert.match(app, /candidateExistingExposureKind\(plan, activeRows\)/,
+    "legacy DIP status records derive the kind from the current account snapshot");
   assert.match(app, /portfolioRiskBlockReason: alreadyHeldReason \|\| plan\.blockedReason \|\| ""/,
     "the retained worker reason reaches the common ALREADY HELD precheck");
 

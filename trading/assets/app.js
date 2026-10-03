@@ -1701,6 +1701,10 @@ function dipEntryWatchCandidateRows(mode = state.mode) {
   const rule = dipEntryRuleFromConfig(config);
   if (!rule.enabled || dipEntryRuleFault(rule)) return [];
   const portfolioId = dipEntryPortfolioIdForMode(mode);
+  // A status record can predate the explicit `blockedKind` field. Read the current
+  // account snapshot as a fallback so an existing order never masquerades as a held
+  // position (and vice versa) after a page reload.
+  const activeRows = activeExposureRowsForMode(mode);
   const watch = Array.isArray(state.dipEntryStatus?.watch) ? state.dipEntryStatus.watch : [];
   return watch
     .filter((plan) => String(plan?.portfolioId || "") === portfolioId)
@@ -1713,6 +1717,8 @@ function dipEntryWatchCandidateRows(mode = state.mode) {
       const currentBid = numericOrNull(plan.bestBid ?? plan.currentBid);
       const currentProbability = currentAsk ?? currentBid ?? numericOrNull(plan.marketProbability ?? plan.marketPrice);
       const alreadyHeldReason = dipWatchPlanAlreadyHeldReason(plan);
+      const heldExposureKind = candidateHeldExposureKind(plan)
+        || (alreadyHeldReason ? candidateExistingExposureKind(plan, activeRows) : "");
       return {
         ...plan,
         tokenId: String(plan.tokenId || ""),
@@ -1732,6 +1738,7 @@ function dipEntryWatchCandidateRows(mode = state.mode) {
           || plan.blockedReason
           || `watching for an executable ask in ${probability(Number(plan.buyMin))}-${probability(Number(plan.buyMax))}`,
         portfolioRiskBlockReason: alreadyHeldReason || plan.blockedReason || "",
+        candidateHeldExposureKind: heldExposureKind,
       };
     });
 }
@@ -11866,9 +11873,13 @@ function activeExposureRowsForMode(mode = state.mode) {
     // this list through the display attribution let a candidate duplicate a position that
     // belonged to another live strategy (or had not yet received attribution metadata).
     const positions = Array.isArray(state.liveState?.positions)
-      ? state.liveState.positions.filter((trade) => !isClosedTrade(trade))
+      ? state.liveState.positions
+        .filter((trade) => !isClosedTrade(trade))
+        .map((trade) => ({ ...trade, candidateExposureKind: "position" }))
       : [];
-    const openOrders = Array.isArray(state.liveState?.openOrders) ? state.liveState.openOrders : [];
+    const openOrders = Array.isArray(state.liveState?.openOrders)
+      ? state.liveState.openOrders.map((order) => ({ ...order, candidateExposureKind: "order" }))
+      : [];
     return [
       ...positions,
       ...openOrders,
@@ -11889,7 +11900,12 @@ function activeExposureRowsForMode(mode = state.mode) {
     });
   }
   const portfolioState = selectedPaperPortfolio(state.botState || {});
-  return paperPortfolioTrades(portfolioState).filter((trade) => !isClosedTrade(trade));
+  return paperPortfolioTrades(portfolioState)
+    .filter((trade) => !isClosedTrade(trade))
+    .map((trade) => ({
+      ...trade,
+      candidateExposureKind: isOpenOrderTrade(trade) ? "order" : "position",
+    }));
 }
 
 function normalizedRiskSlug(value) {
@@ -11945,20 +11961,55 @@ function riskKeysForRow(row, evaluationByToken = new Map()) {
   ].filter(Boolean))];
 }
 
-function candidateRiskBlockReason(item, activeRows = [], evaluationByToken = new Map()) {
-  const token = String(item?.tokenId || item?.assetId || "");
+function candidateExposureKind(row = {}) {
+  const explicit = String(row?.candidateExposureKind || row?.blockedKind || "").trim().toLowerCase();
+  if (explicit === "order" || explicit === "position") return explicit;
+  return isOpenOrderTrade(row) ? "order" : "position";
+}
+
+// Only an identical outcome or market is already owned. A sibling of the same event is
+// still reported as risk-blocked below, because it is a diversification choice rather
+// than an order or position for this very outcome.
+function candidateExistingExposureKind(item, activeRows = []) {
+  const token = String(item?.tokenId || item?.clobTokenId || item?.assetId || "");
   const marketIds = new Set([
     item?.conditionId,
     item?.marketId,
     item?.market,
   ].map((value) => String(value || "").trim().toLowerCase()).filter(Boolean));
-  const keys = new Set(riskKeysForRow(item, evaluationByToken));
   for (const row of activeRows) {
-    const rowToken = String(row?.tokenId || row?.assetId || row?.asset || "");
-    if (token && rowToken && token === rowToken) return "duplicate token already open";
+    const rowToken = String(row?.tokenId || row?.clobTokenId || row?.assetId || row?.asset || "");
+    if (token && rowToken && token === rowToken) return candidateExposureKind(row);
     const rowMarketIds = [row?.conditionId, row?.marketId, row?.market]
       .map((value) => String(value || "").trim().toLowerCase()).filter(Boolean);
-    if (marketIds.size && rowMarketIds.some((id) => marketIds.has(id))) return "same live market already open";
+    if (marketIds.size && rowMarketIds.some((id) => marketIds.has(id))) return candidateExposureKind(row);
+  }
+  return "";
+}
+
+function candidateHeldExposureKind(item = {}) {
+  const explicit = String(item?.candidateHeldExposureKind || item?.blockedKind || "").trim().toLowerCase();
+  if (explicit === "order" || explicit === "position") return explicit;
+  const reason = String(item?.portfolioRiskBlockReason || item?.blockedReason || "");
+  if (/(?:order placed|resting order|buy for this outcome is already resting)/i.test(reason)) return "order";
+  if (/(?:position held|wallet already holds|wallet already has|already has a position)/i.test(reason)) return "position";
+  return "";
+}
+
+function candidateAlreadyHeldPrecheck(item = {}) {
+  const kind = candidateHeldExposureKind(item);
+  if (kind === "order") return "ORDER PLACED";
+  if (kind === "position") return "POSITION HELD";
+  return "ALREADY HELD";
+}
+
+function candidateRiskBlockReason(item, activeRows = [], evaluationByToken = new Map()) {
+  const heldExposureKind = candidateExistingExposureKind(item, activeRows);
+  if (heldExposureKind) {
+    return heldExposureKind === "order" ? "order placed for this market" : "position held for this market";
+  }
+  const keys = new Set(riskKeysForRow(item, evaluationByToken));
+  for (const row of activeRows) {
     const overlap = riskKeysForRow(row, evaluationByToken).filter((key) => keys.has(key));
     const sameEventOrMatch = overlap.filter((key) => key.startsWith("event:") || key.startsWith("match:"));
     if (sameEventOrMatch.length) return `same event or match already open: ${sameEventOrMatch.slice(0, 2).join(", ")}`;
@@ -11977,9 +12028,7 @@ function candidateRiskBlockReason(item, activeRows = [], evaluationByToken = new
 // explanation. A row the reader watched disappear is worse than a row labelled ALREADY
 // HELD, and "why is this not a candidate" is exactly what this tab exists to answer.
 function candidateAlreadyHeldMarketReason(reason) {
-  return reason === "duplicate token already open"
-    || reason === "same live market already open"
-    || /(?:wallet already holds|wallet already has|already holds or has a resting order|already has a position in this market|already held|already open)/i.test(String(reason || ""));
+  return /(?:order placed|position held|wallet already holds|wallet already has|already holds or has a resting order|already has a position in this market|already held|already open)/i.test(String(reason || ""));
 }
 
 function portfolioCandidateSortValue(item, key, mode = state.mode) {
@@ -12170,8 +12219,12 @@ function portfolioCandidateDiagnostics(mode = state.mode) {
   // event are different tokens and only collide on the event key.
   const activeRows = isFixedEntryMode(mode)
     ? [
-      ...(Array.isArray(state.liveState?.positions) ? state.liveState.positions : []),
-      ...(Array.isArray(state.liveState?.openOrders) ? state.liveState.openOrders : []),
+      ...(Array.isArray(state.liveState?.positions)
+        ? state.liveState.positions.map((row) => ({ ...row, candidateExposureKind: "position" }))
+        : []),
+      ...(Array.isArray(state.liveState?.openOrders)
+        ? state.liveState.openOrders.map((row) => ({ ...row, candidateExposureKind: "order" }))
+        : []),
     ].map((row) => {
       const metadata = liveMarketMetadataForTrade(row);
       return metadata ? { ...metadata, ...row } : row;
@@ -12381,7 +12434,7 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
                 : (!live ? "ready for next paper execution" : ""))));
           const precheck = excluded
             ? "EXCLUDED"
-            : (heldRow ? "ALREADY HELD" : (watchingDip ? "WATCHING" : (riskBlockedRow ? "RISK-BLOCKED" : "READY")));
+            : (heldRow ? candidateAlreadyHeldPrecheck(item) : (watchingDip ? "WATCHING" : (riskBlockedRow ? "RISK-BLOCKED" : "READY")));
           const precheckTone = excluded || riskBlockedRow || heldRow
             ? "warning"
             : (watchingDip ? "pending" : "filled");

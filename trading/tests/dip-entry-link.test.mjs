@@ -136,6 +136,25 @@ test("BAIT: api.php's watch plan must publish the observation's slug and eventSl
     "and its already-resolved event slug -- without this, only the sub-market's own slug can ever reach a hit");
 });
 
+test("DIP watch labels a resting order separately from a held position", () => {
+  const watch = API.slice(API.indexOf("function live_dip_entry_watch_payload"));
+  const accountExposure = watch.slice(watch.indexOf("$heldTokens = []"), watch.indexOf("$state = state_payload"));
+  const plan = watch.slice(watch.indexOf("$plans[] = ["), watch.indexOf("'preparedAt'"));
+  const status = functionBody(WORKER_SOURCE, "dipEntryWatchStatusRows");
+
+  assert.match(accountExposure, /\['kind' => 'position', 'rows' => \$live\['positions'\]/,
+    "positions must be classified before open orders");
+  assert.match(accountExposure, /\['kind' => 'order', 'rows' => \$live\['openOrders'\]/,
+    "resting orders must retain their own classification");
+  assert.match(accountExposure, /\$heldTokens\[\$token\] = \$kind/);
+  assert.match(watch, /an order is already placed for this outcome/);
+  assert.match(watch, /the wallet already holds this position/);
+  assert.match(plan, /'blockedKind' => \$blockedKind/,
+    "the worker needs an explicit field instead of inferring a combined legacy message");
+  assert.match(status, /blockedKind: plan\.blockedKind === "order" \|\| plan\.blockedKind === "position"/,
+    "the published watch status keeps the precise kind for the candidate UI");
+});
+
 test("BAIT: api.php must store eventSlug on the recorded hit, or the plan's fix never reaches disk", () => {
   const record = API.slice(API.indexOf("function record_dip_entry_hit"));
   const stored = record.slice(0, record.indexOf("'at' => gmdate"));

@@ -2875,6 +2875,7 @@ function dipEntryWatchStatusRows(context) {
     endDate: plan.endDate || "",
     tags: Array.isArray(plan.tags) ? plan.tags : null,
     blockedReason: plan.blockedReason || "",
+    blockedKind: plan.blockedKind === "order" || plan.blockedKind === "position" ? plan.blockedKind : "",
     currentBid: plan.currentBid ?? null,
     currentAsk: plan.currentAsk ?? null,
     currentExecutablePrice: plan.currentExecutablePrice ?? null,
