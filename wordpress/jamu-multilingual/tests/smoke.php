@@ -3,6 +3,7 @@
 use Jamu\Multilingual\Languages;
 use Jamu\Multilingual\Performance;
 use Jamu\Multilingual\Content;
+use Jamu\Multilingual\Currency;
 use Jamu\Multilingual\Email;
 use Jamu\Multilingual\Identity;
 use Jamu\Multilingual\Repository;
@@ -18,6 +19,27 @@ $languages = new Languages();
 $router = new Router($repository, $languages);
 $languages->set_current('en');
 $content_layer = new Content($repository, $languages, $router);
+
+$currency_layer = new Currency($languages);
+$_COOKIE['yay_currency_widget'] = '3347';
+$czk_price_args = $currency_layer->price_arguments([]);
+if (isset($czk_price_args['decimals'])) {
+    throw new RuntimeException('CZK checkout prices unexpectedly received foreign-currency decimals.');
+}
+$_COOKIE['yay_currency_widget'] = '3348';
+$eur_price_args = $currency_layer->price_arguments([]);
+if (($eur_price_args['decimals'] ?? null) !== 2 || ($eur_price_args['trim_zeros'] ?? true) !== false) {
+    throw new RuntimeException('EUR checkout prices did not retain cents.');
+}
+$_COOKIE['yay_currency_widget'] = '3347';
+$frontend_i18n = new ReflectionMethod(Content::class, 'frontend_i18n_data');
+$frontend_i18n->setAccessible(true);
+$currency_labels = $frontend_i18n->invoke($content_layer);
+if (($currency_labels['exact']['en']['Bank transfer / QR code (-10 Kč)'] ?? '') !== 'Bank transfer / QR code (-10 Kč)'
+    || ($currency_labels['exact']['en']['Křestní jméno'] ?? '') !== 'First name') {
+    throw new RuntimeException('Checkout labels did not use the selected currency and localized Czech field labels.');
+}
+unset($_COOKIE['yay_currency_widget']);
 
 $performance_layer = new Performance();
 $performance_layer->register();

@@ -133,70 +133,37 @@ final class Currency
         document.cookie = encodeURIComponent(name) + '=' + encodeURIComponent(value) + '; path=/; max-age=2592000; SameSite=Lax' + secure;
     }
 
-    function currentCurrencyIdFromYayData() {
-        const currencies = Array.isArray(yay.converted_currency) ? yay.converted_currency : [];
-        for (const currency of currencies) {
-            if (String(currency.currency || '').toUpperCase() === targetCode && currency.ID) {
-                return String(currency.ID);
+    function cookieValue(name) {
+        const prefix = encodeURIComponent(name) + '=';
+        for (const item of document.cookie.split(';')) {
+            const value = item.trim();
+            if (value.indexOf(prefix) === 0) {
+                return decodeURIComponent(value.slice(prefix.length));
             }
         }
         return '';
     }
 
-    targetId = currentCurrencyIdFromYayData() || targetId;
+    // A visitor-selected currency must always win over the language default.
+    // If a public cache served the first /en response before a currency cookie
+    // existed, establish it and reload once into the correct cache variant.
+    if (cookieValue(cookieName)) {
+        return;
+    }
+
     setCookie(cookieName, targetId);
     setCookie(switcherCookieName, '1');
-
-    function selectedSwitcher(select) {
-        return select && String(select.value || '') === targetId;
-    }
-
-    function setSelect(select) {
-        if (!select || selectedSwitcher(select)) {
-            return false;
-        }
-        const option = Array.from(select.options || []).find((item) => String(item.value || '') === targetId);
-        if (!option) {
-            return false;
-        }
-        select.value = targetId;
-        select.dispatchEvent(new Event('change', { bubbles: true }));
-        return true;
-    }
-
-    function apply() {
-        const switchers = Array.from(document.querySelectorAll('select.yay-currency-switcher, select[name="currency"]'));
-        if (!switchers.length) {
-            return;
-        }
-
-        const alreadySelected = switchers.some(selectedSwitcher);
-        if (alreadySelected) {
-            return;
-        }
-
-        const key = 'jamuMlCurrencyApplied:' + targetCode + ':' + window.location.pathname;
-        if (window.sessionStorage && window.sessionStorage.getItem(key) === '1') {
-            return;
-        }
-        if (window.sessionStorage) {
-            window.sessionStorage.setItem(key, '1');
-        }
-
-        for (const select of switchers) {
-            if (setSelect(select)) {
-                if (select.form && typeof select.form.submit === 'function') {
-                    select.form.submit();
-                }
-                return;
+    const refreshKey = 'jamuMlCurrencyBootstrap:' + targetCode + ':' + window.location.pathname;
+    try {
+        if (!window.sessionStorage || window.sessionStorage.getItem(refreshKey) !== '1') {
+            if (window.sessionStorage) {
+                window.sessionStorage.setItem(refreshKey, '1');
             }
+            window.location.reload();
         }
-    }
-
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', apply);
-    } else {
-        apply();
+    } catch (error) {
+        // Storage can be disabled by privacy settings. The currency cookie is
+        // still applied and the following navigation uses the right variant.
     }
 })();
 JS

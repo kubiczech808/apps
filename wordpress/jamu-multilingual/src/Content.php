@@ -909,7 +909,10 @@ HTML;
                 return;
             }
 
-            const hiddenTarget = row || marketingInput;
+            // The plugin injects a label without a parent form-row on this
+            // checkout. Hiding only its input left a clickable, textless
+            // checkbox behind. Hide the whole label (or row) instead.
+            const hiddenTarget = row || marketingLabel || marketingInput;
             hiddenTarget.hidden = true;
             hiddenTarget.setAttribute('aria-hidden', 'true');
             hiddenTarget.style.setProperty('display', 'none', 'important');
@@ -1120,11 +1123,37 @@ JS
         return '-' . number_format($amount, 2, $decimal_separator, ' ') . ' ' . $symbol;
     }
 
+    /**
+     * The gateway label must reflect the currency actually selected in the
+     * browser, rather than merely the language of the current URL.  This
+     * prevents an English page intentionally viewed in CZK from claiming a
+     * EUR discount while its WooCommerce total correctly uses Kč.
+     */
+    private function display_currency(): string
+    {
+        $selected_id = sanitize_text_field(wp_unslash((string) ($_COOKIE['yay_currency_widget'] ?? '')));
+        $currencies = [
+            '3347' => 'CZK',
+            '3348' => 'EUR',
+            '4519' => 'PLN',
+        ];
+        if (isset($currencies[$selected_id])) {
+            return $currencies[$selected_id];
+        }
+
+        return match ($this->languages->current()) {
+            'pl' => 'PLN',
+            'en', 'de' => 'EUR',
+            default => 'CZK',
+        };
+    }
+
     private function frontend_i18n_data(): array
     {
-        $bank_transfer_discount_en = $this->converted_discount_label(10, 'EUR', 'en');
-        $bank_transfer_discount_de = $this->converted_discount_label(10, 'EUR', 'de');
-        $bank_transfer_discount_pl = $this->converted_discount_label(10, 'PLN', 'pl');
+        $display_currency = $this->display_currency();
+        $bank_transfer_discount_en = $this->converted_discount_label(10, $display_currency, 'en');
+        $bank_transfer_discount_de = $this->converted_discount_label(10, $display_currency, 'de');
+        $bank_transfer_discount_pl = $this->converted_discount_label(10, $display_currency, 'pl');
 
         $exact = [
             'en' => [
@@ -1737,6 +1766,27 @@ JS
                 'Bankovním převodem' => 'Przelewem bankowym',
             ],
         ];
+
+        // Czech Services uses these shorter Czech labels on classic checkout,
+        // whereas core WooCommerce uses the English variants listed above.
+        // Keep both spellings so a localized checkout never depends on which
+        // checkout-field provider rendered the form.
+        $czech_checkout_field_labels = [
+            'Křestní jméno' => ['en' => 'First name', 'de' => 'Vorname', 'pl' => 'Imię'],
+            'Křestní jméno (optional)' => ['en' => 'First name (optional)', 'de' => 'Vorname (optional)', 'pl' => 'Imię (opcjonalnie)'],
+            'Křestní jméno (volitelné)' => ['en' => 'First name (optional)', 'de' => 'Vorname (optional)', 'pl' => 'Imię (opcjonalnie)'],
+            'Název firmy' => ['en' => 'Company name', 'de' => 'Firmenname', 'pl' => 'Nazwa firmy'],
+            'Název firmy (optional)' => ['en' => 'Company name (optional)', 'de' => 'Firmenname (optional)', 'pl' => 'Nazwa firmy (opcjonalnie)'],
+            'Název firmy (volitelné)' => ['en' => 'Company name (optional)', 'de' => 'Firmenname (optional)', 'pl' => 'Nazwa firmy (opcjonalnie)'],
+            'Země / Region' => ['en' => 'Country / Region', 'de' => 'Land / Region', 'pl' => 'Kraj / region'],
+            'Ulice a č.p.' => ['en' => 'Street address', 'de' => 'Straße und Hausnummer', 'pl' => 'Ulica i numer domu'],
+            'Ulice a č. p.' => ['en' => 'Street address', 'de' => 'Straße und Hausnummer', 'pl' => 'Ulica i numer domu'],
+        ];
+        foreach ($czech_checkout_field_labels as $czech => $translations) {
+            foreach ($translations as $language => $translation) {
+                $checkout_exact[$language][$czech] = $translation;
+            }
+        }
 
         foreach ($checkout_exact as $language => $strings) {
             $exact[$language] = array_replace($exact[$language] ?? [], $strings);
