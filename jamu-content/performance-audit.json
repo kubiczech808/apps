@@ -5,25 +5,31 @@
       "audit_error": "JSONDecodeError",
       "http_status": 200,
       "content_type": "application/json; charset=UTF-8",
-      "body_bytes": 8396,
+      "body_bytes": 9163,
       "starts_with_html": false,
-      "contains_php_error": false
+      "contains_php_error": false,
+      "body_prefix": "{\"schema\":1,\"uri\":\"/?jamu_bridge=performance-audit\",\"context\":{\"home\":true,\"product\":false,\"cart\":false,\"checkout\":false},\"metrics\":{\"wordpress_seconds\":3,\"database_queries\":412,\"memory_peak_bytes\":205520896,\"scripts_enqueued\":23,\"styles_en",
+      "body_suffix": "oing_ajax\",\"milliseconds\":22.4},{\"after_hook\":\"admin_url\",\"milliseconds\":21},{\"after_hook\":\"log_query_custom_data\",\"milliseconds\":20.6}]}} <!-- WP Optimize page cache - https://teamupdraft.com/wp-optimize/ - Page not served from cache  --> "
     },
     "product_en": {
       "audit_error": "JSONDecodeError",
       "http_status": 200,
       "content_type": "application/json; charset=UTF-8",
-      "body_bytes": 8463,
+      "body_bytes": 9046,
       "starts_with_html": false,
-      "contains_php_error": false
+      "contains_php_error": false,
+      "body_prefix": "{\"schema\":1,\"uri\":\"/en/product/herbal-therapeutic-oil-sanga-sanga-classic/?jamu_bridge=performance-audit\",\"context\":{\"home\":false,\"product\":true,\"cart\":false,\"checkout\":false},\"metrics\":{\"wordpress_seconds\":4.413,\"database_queries\":492,\"mem",
+      "body_suffix": "ry_custom_data\",\"milliseconds\":25.7},{\"after_hook\":\"stylesheet\",\"milliseconds\":22.9},{\"after_hook\":\"wp_doing_ajax\",\"milliseconds\":22.7}]}} <!-- WP Optimize page cache - https://teamupdraft.com/wp-optimize/ - Page not served from cache  --> "
     },
     "cart_en": {
       "audit_error": "JSONDecodeError",
       "http_status": 200,
       "content_type": "application/json; charset=UTF-8",
-      "body_bytes": 8421,
+      "body_bytes": 9069,
       "starts_with_html": false,
-      "contains_php_error": false
+      "contains_php_error": false,
+      "body_prefix": "{\"schema\":1,\"uri\":\"/en/cart/?jamu_bridge=performance-audit\",\"context\":{\"home\":false,\"product\":false,\"cart\":true,\"checkout\":false},\"metrics\":{\"wordpress_seconds\":4.599,\"database_queries\":496,\"memory_peak_bytes\":209715200,\"scripts_enqueued\":9",
+      "body_suffix": "t\",\"milliseconds\":23.2},{\"after_hook\":\"woocommerce_currency_symbols\",\"milliseconds\":21.8},{\"after_hook\":\"stylesheet\",\"milliseconds\":21}]}} <!-- WP Optimize page cache - https://teamupdraft.com/wp-optimize/ - Page not served from cache  --> "
     },
     "checkout_en": {
       "schema": 1,
@@ -35,7 +41,7 @@
         "checkout": false
       },
       "metrics": {
-        "wordpress_seconds": 4.381,
+        "wordpress_seconds": 4.543,
         "database_queries": 496,
         "memory_peak_bytes": 207618048,
         "scripts_enqueued": 90,
@@ -337,67 +343,67 @@
       },
       "database": {
         "autoloaded_options_bytes": 476302,
-        "recorded_query_seconds": 0.172,
+        "recorded_query_seconds": 0.153,
         "slow_callers": [
           {
             "caller": "require('wp-blog-header.php'), require_once('wp-load.php'), require_once('wp-config.php'), require_once('wp-settings.php'), do_action('init'), WP_Hook->do_action, WP_Hook->apply_fi",
             "queries": 125,
-            "milliseconds": 15
+            "milliseconds": 14.3
+          },
+          {
+            "caller": "require('wp-blog-header.php'), require_once('wp-load.php'), require_once('wp-config.php'), require_once('wp-settings.php'), do_action('init'), WP_Hook->do_action, WP_Hook->apply_fi",
+            "queries": 1,
+            "milliseconds": 7.4
           },
           {
             "caller": "require('wp-blog-header.php'), require_once('wp-includes/template-loader.php'), include('wp-includes/template-canvas.php'), get_the_block_template_html, do_blocks, render_block, WP",
             "queries": 2,
-            "milliseconds": 7.1
+            "milliseconds": 5.9
+          },
+          {
+            "caller": "require('wp-blog-header.php'), require_once('wp-includes/template-loader.php'), include('wp-includes/template-canvas.php'), get_the_block_template_html, do_blocks, render_block, WP",
+            "queries": 1,
+            "milliseconds": 5.9
+          },
+          {
+            "caller": "shutdown_action_hook, do_action('shutdown'), WP_Hook->do_action, WP_Hook->apply_filters, {closure}",
+            "queries": 2,
+            "milliseconds": 5.1
           },
           {
             "caller": "require('wp-blog-header.php'), require_once('wp-load.php'), require_once('wp-config.php'), require_once('wp-settings.php'), do_action('plugins_loaded'), WP_Hook->do_action, WP_Hook",
             "queries": 2,
-            "milliseconds": 6.9
+            "milliseconds": 4.6
           },
           {
             "caller": "require('wp-blog-header.php'), require_once('wp-includes/template-loader.php'), include('wp-includes/template-canvas.php'), wp_head, do_action('wp_head'), WP_Hook->do_action, WP_Ho",
             "queries": 1,
-            "milliseconds": 6.8
+            "milliseconds": 4.5
           },
           {
             "caller": "require('wp-blog-header.php'), require_once('wp-includes/template-loader.php'), include('wp-includes/template-canvas.php'), get_the_block_template_html, do_blocks, render_block, WP",
-            "queries": 2,
-            "milliseconds": 4.7
-          },
-          {
-            "caller": "require('wp-blog-header.php'), require_once('wp-load.php'), require_once('wp-config.php'), require_once('wp-settings.php'), do_action('init'), WP_Hook->do_action, WP_Hook->apply_fi",
-            "queries": 1,
-            "milliseconds": 4.6
-          },
-          {
-            "caller": "require('wp-blog-header.php'), require_once('wp-includes/template-loader.php'), include('wp-includes/template-canvas.php'), get_the_block_template_html, do_blocks, render_block, WP",
-            "queries": 1,
-            "milliseconds": 4.3
-          },
-          {
-            "caller": "require('wp-blog-header.php'), require_once('wp-includes/template-loader.php'), include('wp-includes/template-canvas.php'), get_the_block_template_html, do_blocks, render_block, WP",
-            "queries": 1,
-            "milliseconds": 4
-          },
-          {
-            "caller": "require('wp-blog-header.php'), require_once('wp-includes/template-loader.php'), include('wp-includes/template-canvas.php'), get_the_block_template_html, do_blocks, render_block, WP",
-            "queries": 1,
-            "milliseconds": 3.9
-          },
-          {
-            "caller": "require('wp-blog-header.php'), require_once('wp-load.php'), require_once('wp-config.php'), require_once('wp-settings.php'), do_action('init'), WP_Hook->do_action, WP_Hook->apply_fi",
-            "queries": 5,
-            "milliseconds": 3.7
-          },
-          {
-            "caller": "require('wp-blog-header.php'), require_once('wp-includes/template-loader.php'), include('wp-includes/template-canvas.php'), get_the_block_template_html, do_blocks, render_block, WP",
-            "queries": 1,
-            "milliseconds": 3
+            "queries": 3,
+            "milliseconds": 3.5
           },
           {
             "caller": "require('wp-blog-header.php'), require_once('wp-load.php'), require_once('wp-config.php'), require_once('wp-settings.php'), do_action('plugins_loaded'), WP_Hook->do_action, WP_Hook",
             "queries": 2,
-            "milliseconds": 2.9
+            "milliseconds": 3
+          },
+          {
+            "caller": "require('wp-blog-header.php'), require_once('wp-includes/template-loader.php'), include('wp-includes/template-canvas.php'), get_the_block_template_html, do_blocks, render_block, WP",
+            "queries": 9,
+            "milliseconds": 2.7
+          },
+          {
+            "caller": "require('wp-blog-header.php'), require_once('wp-includes/template-loader.php'), include('wp-includes/template-canvas.php'), get_the_block_template_html, do_blocks, render_block, WP",
+            "queries": 2,
+            "milliseconds": 2.3
+          },
+          {
+            "caller": "require('wp-blog-header.php'), require_once('wp-includes/template-loader.php'), include('wp-includes/template-canvas.php'), get_the_block_template_html, do_blocks, render_block, WP",
+            "queries": 8,
+            "milliseconds": 2.2
           }
         ]
       },
@@ -405,61 +411,109 @@
         "slow_plugin_load_intervals": [
           {
             "plugin": "wpforms-lite/wpforms.php",
-            "milliseconds": 260
+            "milliseconds": 277.4
           },
           {
             "plugin": "woocommerce/woocommerce.php",
-            "milliseconds": 145.4
+            "milliseconds": 145
           },
           {
             "plugin": "woocommerce-payments/woocommerce-payments.php",
-            "milliseconds": 61.2
+            "milliseconds": 63.7
           },
           {
             "plugin": "packeta/packeta.php",
-            "milliseconds": 56.1
+            "milliseconds": 54.8
           },
           {
             "plugin": "open-user-map/open-user-map.php",
-            "milliseconds": 43.6
+            "milliseconds": 43.4
           },
           {
             "plugin": "woocommerce-pay-for-payment/woocommerce-payforpayment.php",
-            "milliseconds": 19.8
+            "milliseconds": 19
           },
           {
             "plugin": "wordpress-seo/wp-seo.php",
-            "milliseconds": 18.9
-          },
-          {
-            "plugin": "google-site-kit/google-site-kit.php",
-            "milliseconds": 18.2
+            "milliseconds": 19
           },
           {
             "plugin": "cookie-law-info/cookie-law-info.php",
-            "milliseconds": 17.6
+            "milliseconds": 18.9
           },
           {
             "plugin": "woo-stripe-payment/stripe-payments.php",
-            "milliseconds": 17.5
+            "milliseconds": 17.8
           },
           {
-            "plugin": "facebook-for-woocommerce/facebook-for-woocommerce.php",
-            "milliseconds": 10.7
+            "plugin": "google-site-kit/google-site-kit.php",
+            "milliseconds": 14.1
           },
           {
             "plugin": "wp-optimize/wp-optimize.php",
-            "milliseconds": 8.4
+            "milliseconds": 8.8
+          },
+          {
+            "plugin": "WC-Doprava-main/wcdoprava.php",
+            "milliseconds": 6.2
           }
         ],
-        "http_calls": []
+        "http_calls": [],
+        "slow_hook_intervals": [
+          {
+            "after_hook": "transient_jetpack_autoloader_plugin_paths",
+            "milliseconds": 42
+          },
+          {
+            "after_hook": "woocommerce_log_directory",
+            "milliseconds": 41.6
+          },
+          {
+            "after_hook": "default_option_packetery_advanced",
+            "milliseconds": 39.1
+          },
+          {
+            "after_hook": "wc_payments_api_client",
+            "milliseconds": 30.1
+          },
+          {
+            "after_hook": "option_fs_debug_mode",
+            "milliseconds": 29.8
+          },
+          {
+            "after_hook": "wp_theme_json_data_default",
+            "milliseconds": 25.9
+          },
+          {
+            "after_hook": "default_option_woocommerce_force_ssl_checkout",
+            "milliseconds": 24.8
+          },
+          {
+            "after_hook": "log_query_custom_data",
+            "milliseconds": 24.7
+          },
+          {
+            "after_hook": "woocommerce_currency_symbols",
+            "milliseconds": 23.8
+          },
+          {
+            "after_hook": "stylesheet",
+            "milliseconds": 23.1
+          },
+          {
+            "after_hook": "wp_doing_ajax",
+            "milliseconds": 22.9
+          }
+        ]
       }
     },
     "cart_with_item_en": {
       "audit_error": "JSONDecodeError",
       "add_to_cart_status": 200,
       "http_status": 200,
-      "body_bytes": 8419
+      "body_bytes": 8905,
+      "body_prefix": "{\"schema\":1,\"uri\":\"/en/cart/?jamu_bridge=performance-audit\",\"context\":{\"home\":false,\"product\":false,\"cart\":true,\"checkout\":false},\"metrics\":{\"wordpress_seconds\":4.457,\"database_queries\":500,\"memory_peak_bytes\":207618048,\"scripts_enqueued\":9",
+      "body_suffix": "r_hook\":\"default_option_woocommerce_force_ssl_checkout\",\"milliseconds\":22.6},{\"after_hook\":\"log_query_custom_data\",\"milliseconds\":21.5}]}} <!-- WP Optimize page cache - https://teamupdraft.com/wp-optimize/ - Page not served from cache  --> "
     }
   }
 }
