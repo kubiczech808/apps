@@ -2,51 +2,333 @@
   "schema": 1,
   "pages": {
     "home": {
-      "audit_error": "JSONDecodeError",
-      "http_status": 200,
-      "content_type": "application/json; charset=UTF-8",
-      "body_bytes": 9163,
-      "starts_with_html": false,
-      "contains_php_error": false,
-      "body_prefix": "{\"schema\":1,\"uri\":\"/?jamu_bridge=performance-audit\",\"context\":{\"home\":true,\"product\":false,\"cart\":false,\"checkout\":false},\"metrics\":{\"wordpress_seconds\":3,\"database_queries\":412,\"memory_peak_bytes\":205520896,\"scripts_enqueued\":23,\"styles_en",
-      "body_suffix": "oing_ajax\",\"milliseconds\":22.4},{\"after_hook\":\"admin_url\",\"milliseconds\":21},{\"after_hook\":\"log_query_custom_data\",\"milliseconds\":20.6}]}} <!-- WP Optimize page cache - https://teamupdraft.com/wp-optimize/ - Page not served from cache  --> "
-    },
-    "product_en": {
-      "audit_error": "JSONDecodeError",
-      "http_status": 200,
-      "content_type": "application/json; charset=UTF-8",
-      "body_bytes": 9046,
-      "starts_with_html": false,
-      "contains_php_error": false,
-      "body_prefix": "{\"schema\":1,\"uri\":\"/en/product/herbal-therapeutic-oil-sanga-sanga-classic/?jamu_bridge=performance-audit\",\"context\":{\"home\":false,\"product\":true,\"cart\":false,\"checkout\":false},\"metrics\":{\"wordpress_seconds\":4.413,\"database_queries\":492,\"mem",
-      "body_suffix": "ry_custom_data\",\"milliseconds\":25.7},{\"after_hook\":\"stylesheet\",\"milliseconds\":22.9},{\"after_hook\":\"wp_doing_ajax\",\"milliseconds\":22.7}]}} <!-- WP Optimize page cache - https://teamupdraft.com/wp-optimize/ - Page not served from cache  --> "
-    },
-    "cart_en": {
-      "audit_error": "JSONDecodeError",
-      "http_status": 200,
-      "content_type": "application/json; charset=UTF-8",
-      "body_bytes": 9069,
-      "starts_with_html": false,
-      "contains_php_error": false,
-      "body_prefix": "{\"schema\":1,\"uri\":\"/en/cart/?jamu_bridge=performance-audit\",\"context\":{\"home\":false,\"product\":false,\"cart\":true,\"checkout\":false},\"metrics\":{\"wordpress_seconds\":4.599,\"database_queries\":496,\"memory_peak_bytes\":209715200,\"scripts_enqueued\":9",
-      "body_suffix": "t\",\"milliseconds\":23.2},{\"after_hook\":\"woocommerce_currency_symbols\",\"milliseconds\":21.8},{\"after_hook\":\"stylesheet\",\"milliseconds\":21}]}} <!-- WP Optimize page cache - https://teamupdraft.com/wp-optimize/ - Page not served from cache  --> "
-    },
-    "checkout_en": {
       "schema": 1,
-      "uri": "/en/cart/",
+      "uri": "/?jamu_bridge=performance-audit",
       "context": {
-        "home": false,
+        "home": true,
         "product": false,
-        "cart": true,
+        "cart": false,
         "checkout": false
       },
       "metrics": {
-        "wordpress_seconds": 4.543,
-        "database_queries": 496,
-        "memory_peak_bytes": 207618048,
-        "scripts_enqueued": 90,
-        "styles_enqueued": 60,
-        "set_cookie_headers": 0
+        "wordpress_seconds": 3,
+        "database_queries": 412,
+        "memory_peak_bytes": 205520896,
+        "scripts_enqueued": 23,
+        "styles_enqueued": 54,
+        "set_cookie_headers": 2,
+        "scripts": [
+          {
+            "handle": "WCPAY_ASSETS",
+            "source": ""
+          },
+          {
+            "handle": "jquery",
+            "source": ""
+          },
+          {
+            "handle": "cookie-law-info",
+            "source": "script.min.js"
+          },
+          {
+            "handle": "jquery-core",
+            "source": "jquery.min.js"
+          },
+          {
+            "handle": "jquery-migrate",
+            "source": "jquery-migrate.min.js"
+          },
+          {
+            "handle": "wc-jquery-blockui",
+            "source": "jquery.blockUI.min.js"
+          },
+          {
+            "handle": "wc-add-to-cart",
+            "source": "add-to-cart.min.js"
+          },
+          {
+            "handle": "wc-js-cookie",
+            "source": "js.cookie.min.js"
+          },
+          {
+            "handle": "google_gtagjs",
+            "source": "js"
+          },
+          {
+            "handle": "awdr-main",
+            "source": "site_main.js"
+          },
+          {
+            "handle": "awdr-dynamic-price",
+            "source": "awdr-dynamic-price.js"
+          },
+          {
+            "handle": "ecomail",
+            "source": "plugin.js"
+          },
+          {
+            "handle": "sourcebuster-js",
+            "source": "sourcebuster.min.js"
+          },
+          {
+            "handle": "wc-order-attribution",
+            "source": "order-attribution.min.js"
+          },
+          {
+            "handle": "yay-currency-callback-general",
+            "source": "general.helper.min.js"
+          },
+          {
+            "handle": "yay-currency-callback-blocks",
+            "source": "blocks.helper.min.js"
+          },
+          {
+            "handle": "yay-currency-frontend-script",
+            "source": "script.min.js"
+          },
+          {
+            "handle": "yay-currency-third-party",
+            "source": "third-party.min.js"
+          },
+          {
+            "handle": "yay-currency-woo-blocks",
+            "source": "woocommerce-blocks.min.js"
+          },
+          {
+            "handle": "googlesitekit-events-provider-content-events",
+            "source": "googlesitekit-events-provider-content-events-c7172f3fd0e4d5ad62ef.js"
+          },
+          {
+            "handle": "woocommerce",
+            "source": "woocommerce.min.js"
+          },
+          {
+            "handle": "googlesitekit-events-provider-woocommerce",
+            "source": "googlesitekit-events-provider-woocommerce-86c5a3ff303665006998.js"
+          },
+          {
+            "handle": "googlesitekit-events-provider-wpforms",
+            "source": "googlesitekit-events-provider-wpforms-fdbd42f50702ca1e0c36.js"
+          }
+        ],
+        "styles": [
+          {
+            "handle": "wp-img-auto-sizes-contain",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-image",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-image-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-group",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-group-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-navigation-link",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-navigation-link-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-navigation-submenu",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-navigation-submenu-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-navigation",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-navigation-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-template-part",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-template-part-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-paragraph",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-paragraph-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-heading",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-heading-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-button",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-button-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-buttons",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-buttons-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-spacer",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-spacer-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-column",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-column-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-columns",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-columns-theme",
+            "source": ""
+          },
+          {
+            "handle": "wc-blocks-style",
+            "source": "wc-blocks.css"
+          },
+          {
+            "handle": "wc-blocks-style-all-products",
+            "source": "all-products.css"
+          },
+          {
+            "handle": "wp-block-shortcode",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-shortcode-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-social-link",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-social-link-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-social-links",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-social-links-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-list-item",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-list-item-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-list",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-list-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-library",
+            "source": ""
+          },
+          {
+            "handle": "woocommerce-blocktheme",
+            "source": "woocommerce-blocktheme.css"
+          },
+          {
+            "handle": "global-styles",
+            "source": ""
+          },
+          {
+            "handle": "core-block-supports",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-template-skip-link",
+            "source": ""
+          },
+          {
+            "handle": "woocommerce-layout",
+            "source": "woocommerce-layout.css"
+          },
+          {
+            "handle": "woocommerce-smallscreen",
+            "source": "woocommerce-smallscreen.css"
+          },
+          {
+            "handle": "woocommerce-general",
+            "source": "woocommerce.css"
+          },
+          {
+            "handle": "woocommerce-inline",
+            "source": ""
+          },
+          {
+            "handle": "jadro-style",
+            "source": "style.css"
+          },
+          {
+            "handle": "jadro-woocommerce",
+            "source": "woocommerce.css"
+          },
+          {
+            "handle": "yay-currency-frontend-style",
+            "source": "styles.css"
+          },
+          {
+            "handle": "wpo_min-header-0",
+            "source": "wpo-minify-header-5d2f3b7c.min.css"
+          },
+          {
+            "handle": "wpo_min-header-1",
+            "source": "wpo-minify-header-eebb1416.min.css"
+          },
+          {
+            "handle": "wpo_min-header-2",
+            "source": "wpo-minify-header-53902eb7.min.css"
+          }
+        ]
       },
       "cache": {
         "wp_cache_constant": true,
@@ -343,66 +625,982 @@
       },
       "database": {
         "autoloaded_options_bytes": 476302,
-        "recorded_query_seconds": 0.153,
+        "recorded_query_seconds": 0.124,
         "slow_callers": [
           {
             "caller": "require('wp-blog-header.php'), require_once('wp-load.php'), require_once('wp-config.php'), require_once('wp-settings.php'), do_action('init'), WP_Hook->do_action, WP_Hook->apply_fi",
             "queries": 125,
-            "milliseconds": 14.3
-          },
-          {
-            "caller": "require('wp-blog-header.php'), require_once('wp-load.php'), require_once('wp-config.php'), require_once('wp-settings.php'), do_action('init'), WP_Hook->do_action, WP_Hook->apply_fi",
-            "queries": 1,
-            "milliseconds": 7.4
-          },
-          {
-            "caller": "require('wp-blog-header.php'), require_once('wp-includes/template-loader.php'), include('wp-includes/template-canvas.php'), get_the_block_template_html, do_blocks, render_block, WP",
-            "queries": 2,
-            "milliseconds": 5.9
-          },
-          {
-            "caller": "require('wp-blog-header.php'), require_once('wp-includes/template-loader.php'), include('wp-includes/template-canvas.php'), get_the_block_template_html, do_blocks, render_block, WP",
-            "queries": 1,
-            "milliseconds": 5.9
-          },
-          {
-            "caller": "shutdown_action_hook, do_action('shutdown'), WP_Hook->do_action, WP_Hook->apply_filters, {closure}",
-            "queries": 2,
-            "milliseconds": 5.1
+            "milliseconds": 9.6
           },
           {
             "caller": "require('wp-blog-header.php'), require_once('wp-load.php'), require_once('wp-config.php'), require_once('wp-settings.php'), do_action('plugins_loaded'), WP_Hook->do_action, WP_Hook",
             "queries": 2,
-            "milliseconds": 4.6
+            "milliseconds": 7
+          },
+          {
+            "caller": "require('wp-blog-header.php'), require_once('wp-load.php'), require_once('wp-config.php'), require_once('wp-settings.php'), do_action('init'), WP_Hook->do_action, WP_Hook->apply_fi",
+            "queries": 1,
+            "milliseconds": 5.4
           },
           {
             "caller": "require('wp-blog-header.php'), require_once('wp-includes/template-loader.php'), include('wp-includes/template-canvas.php'), wp_head, do_action('wp_head'), WP_Hook->do_action, WP_Ho",
             "queries": 1,
-            "milliseconds": 4.5
+            "milliseconds": 5.1
+          },
+          {
+            "caller": "shutdown_action_hook, do_action('shutdown'), WP_Hook->do_action, WP_Hook->apply_filters, {closure}",
+            "queries": 2,
+            "milliseconds": 5
           },
           {
             "caller": "require('wp-blog-header.php'), require_once('wp-includes/template-loader.php'), include('wp-includes/template-canvas.php'), get_the_block_template_html, do_blocks, render_block, WP",
+            "queries": 1,
+            "milliseconds": 4.7
+          },
+          {
+            "caller": "require('wp-blog-header.php'), require_once('wp-includes/template-loader.php'), include('wp-includes/template-canvas.php'), get_the_block_template_html, do_shortcode, preg_replace_",
+            "queries": 1,
+            "milliseconds": 4.4
+          },
+          {
+            "caller": "require('wp-blog-header.php'), require_once('wp-includes/template-loader.php'), include('wp-includes/template-canvas.php'), wp_head, do_action('wp_head'), WP_Hook->do_action, WP_Ho",
+            "queries": 3,
+            "milliseconds": 4
+          },
+          {
+            "caller": "require('wp-blog-header.php'), require_once('wp-load.php'), require_once('wp-config.php'), require_once('wp-settings.php'), do_action('init'), WP_Hook->do_action, WP_Hook->apply_fi",
+            "queries": 5,
+            "milliseconds": 4
+          },
+          {
+            "caller": "require('wp-blog-header.php'), require_once('wp-load.php'), require_once('wp-config.php'), require_once('wp-settings.php'), do_action('plugins_loaded'), WP_Hook->do_action, WP_Hook",
+            "queries": 2,
+            "milliseconds": 2.2
+          },
+          {
+            "caller": "require('wp-blog-header.php'), require_once('wp-includes/template-loader.php'), include('wp-includes/template-canvas.php'), get_the_block_template_html, do_blocks, render_block, WP",
+            "queries": 3,
+            "milliseconds": 2.2
+          },
+          {
+            "caller": "require('wp-blog-header.php'), require_once('wp-includes/template-loader.php'), get_front_page_template, get_query_template, locate_block_template, resolve_block_template, get_bloc",
+            "queries": 1,
+            "milliseconds": 1.9
+          }
+        ]
+      },
+      "runtime": {
+        "slow_plugin_load_intervals": [
+          {
+            "plugin": "wpforms-lite/wpforms.php",
+            "milliseconds": 252.1
+          },
+          {
+            "plugin": "woocommerce/woocommerce.php",
+            "milliseconds": 152.3
+          },
+          {
+            "plugin": "woocommerce-payments/woocommerce-payments.php",
+            "milliseconds": 63.9
+          },
+          {
+            "plugin": "packeta/packeta.php",
+            "milliseconds": 54.6
+          },
+          {
+            "plugin": "open-user-map/open-user-map.php",
+            "milliseconds": 48
+          },
+          {
+            "plugin": "wordpress-seo/wp-seo.php",
+            "milliseconds": 21
+          },
+          {
+            "plugin": "cookie-law-info/cookie-law-info.php",
+            "milliseconds": 19.8
+          },
+          {
+            "plugin": "woocommerce-pay-for-payment/woocommerce-payforpayment.php",
+            "milliseconds": 19.4
+          },
+          {
+            "plugin": "woo-stripe-payment/stripe-payments.php",
+            "milliseconds": 17.8
+          },
+          {
+            "plugin": "google-site-kit/google-site-kit.php",
+            "milliseconds": 16.4
+          },
+          {
+            "plugin": "wp-optimize/wp-optimize.php",
+            "milliseconds": 8.8
+          },
+          {
+            "plugin": "WC-Doprava-main/wcdoprava.php",
+            "milliseconds": 7.5
+          }
+        ],
+        "http_calls": [],
+        "slow_hook_intervals": [
+          {
+            "after_hook": "woocommerce_log_directory",
+            "milliseconds": 44.9
+          },
+          {
+            "after_hook": "transient_jetpack_autoloader_plugin_paths",
+            "milliseconds": 41.1
+          },
+          {
+            "after_hook": "default_option_packetery_advanced",
+            "milliseconds": 38.7
+          },
+          {
+            "after_hook": "option_fs_debug_mode",
+            "milliseconds": 32.9
+          },
+          {
+            "after_hook": "wc_payments_api_client",
+            "milliseconds": 32.2
+          },
+          {
+            "after_hook": "default_option_woocommerce_force_ssl_checkout",
+            "milliseconds": 26.4
+          },
+          {
+            "after_hook": "log_query_custom_data",
+            "milliseconds": 25.1
+          },
+          {
+            "after_hook": "woocommerce_currency_symbols",
+            "milliseconds": 24
+          },
+          {
+            "after_hook": "stylesheet",
+            "milliseconds": 22.5
+          },
+          {
+            "after_hook": "wp_doing_ajax",
+            "milliseconds": 20.6
+          },
+          {
+            "after_hook": "log_query_custom_data",
+            "milliseconds": 20.4
+          }
+        ]
+      }
+    },
+    "product_en": {
+      "schema": 1,
+      "uri": "/en/product/herbal-therapeutic-oil-sanga-sanga-classic/?jamu_bridge=performance-audit",
+      "context": {
+        "home": false,
+        "product": true,
+        "cart": false,
+        "checkout": false
+      },
+      "metrics": {
+        "wordpress_seconds": 4.246,
+        "database_queries": 491,
+        "memory_peak_bytes": 207618048,
+        "scripts_enqueued": 32,
+        "styles_enqueued": 77,
+        "set_cookie_headers": 0,
+        "scripts": [
+          {
+            "handle": "WCPAY_ASSETS",
+            "source": ""
+          },
+          {
+            "handle": "jquery",
+            "source": ""
+          },
+          {
+            "handle": "cookie-law-info",
+            "source": "script.min.js"
+          },
+          {
+            "handle": "jquery-core",
+            "source": "jquery.min.js"
+          },
+          {
+            "handle": "jquery-migrate",
+            "source": "jquery-migrate.min.js"
+          },
+          {
+            "handle": "wc-jquery-blockui",
+            "source": "jquery.blockUI.min.js"
+          },
+          {
+            "handle": "wc-add-to-cart",
+            "source": "add-to-cart.min.js"
+          },
+          {
+            "handle": "wc-js-cookie",
+            "source": "js.cookie.min.js"
+          },
+          {
+            "handle": "google_gtagjs",
+            "source": "js"
+          },
+          {
+            "handle": "wc-zoom",
+            "source": "jquery.zoom.min.js"
+          },
+          {
+            "handle": "wc-flexslider",
+            "source": "jquery.flexslider.min.js"
+          },
+          {
+            "handle": "wc-photoswipe",
+            "source": "photoswipe.min.js"
+          },
+          {
+            "handle": "wc-photoswipe-ui-default",
+            "source": "photoswipe-ui-default.min.js"
+          },
+          {
+            "handle": "wc-single-product",
+            "source": "single-product.min.js"
+          },
+          {
+            "handle": "akismet-frontend",
+            "source": "akismet-frontend.js"
+          },
+          {
+            "handle": "awdr-main",
+            "source": "site_main.js"
+          },
+          {
+            "handle": "awdr-dynamic-price",
+            "source": "awdr-dynamic-price.js"
+          },
+          {
+            "handle": "ecomail",
+            "source": "plugin.js"
+          },
+          {
+            "handle": "sourcebuster-js",
+            "source": "sourcebuster.min.js"
+          },
+          {
+            "handle": "wc-order-attribution",
+            "source": "order-attribution.min.js"
+          },
+          {
+            "handle": "yay-currency-callback-general",
+            "source": "general.helper.min.js"
+          },
+          {
+            "handle": "yay-currency-callback-blocks",
+            "source": "blocks.helper.min.js"
+          },
+          {
+            "handle": "yay-currency-frontend-script",
+            "source": "script.min.js"
+          },
+          {
+            "handle": "yay-currency-third-party",
+            "source": "third-party.min.js"
+          },
+          {
+            "handle": "yay-currency-woo-blocks",
+            "source": "woocommerce-blocks.min.js"
+          },
+          {
+            "handle": "googlesitekit-events-provider-content-events",
+            "source": "googlesitekit-events-provider-content-events-c7172f3fd0e4d5ad62ef.js"
+          },
+          {
+            "handle": "woocommerce",
+            "source": "woocommerce.min.js"
+          },
+          {
+            "handle": "googlesitekit-events-provider-woocommerce",
+            "source": "googlesitekit-events-provider-woocommerce-86c5a3ff303665006998.js"
+          },
+          {
+            "handle": "googlesitekit-events-provider-wpforms",
+            "source": "googlesitekit-events-provider-wpforms-fdbd42f50702ca1e0c36.js"
+          },
+          {
+            "handle": "wp-dom-ready",
+            "source": "dom-ready.min.js"
+          },
+          {
+            "handle": "wp-polyfill",
+            "source": "wp-polyfill.min.js"
+          },
+          {
+            "handle": "wcpay-frontend-tracks",
+            "source": "frontend-tracks.js"
+          }
+        ],
+        "styles": [
+          {
+            "handle": "wp-img-auto-sizes-contain",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-image",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-image-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-navigation-link",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-navigation-link-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-navigation-submenu",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-navigation-submenu-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-navigation",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-navigation-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-paragraph",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-paragraph-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-pattern",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-pattern-theme",
+            "source": ""
+          },
+          {
+            "handle": "wc-blocks-style",
+            "source": "wc-blocks.css"
+          },
+          {
+            "handle": "wc-blocks-style-mini-cart-contents",
+            "source": "mini-cart-contents.css"
+          },
+          {
+            "handle": "wc-blocks-packages-style",
+            "source": "packages-style.css"
+          },
+          {
+            "handle": "woocommerce-mini-cart-style",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-group",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-group-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-template-part",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-template-part-theme",
+            "source": ""
+          },
+          {
+            "handle": "wc-blocks-style-breadcrumbs",
+            "source": "breadcrumbs.css"
+          },
+          {
+            "handle": "wc-blocks-style-store-notices",
+            "source": "store-notices.css"
+          },
+          {
+            "handle": "wc-blocks-style-product-image-gallery",
+            "source": "product-image-gallery.css"
+          },
+          {
+            "handle": "wp-block-column",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-column-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-post-title",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-post-title-theme",
+            "source": ""
+          },
+          {
+            "handle": "woocommerce-product-price-style",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-post-excerpt",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-post-excerpt-theme",
+            "source": ""
+          },
+          {
+            "handle": "woocommerce-add-to-cart-form-style",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-columns",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-columns-theme",
+            "source": ""
+          },
+          {
+            "handle": "wc-blocks-style-product-details",
+            "source": "product-details.css"
+          },
+          {
+            "handle": "wp-block-spacer",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-spacer-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-heading",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-heading-theme",
+            "source": ""
+          },
+          {
+            "handle": "wc-blocks-style-product-image",
+            "source": "product-image.css"
+          },
+          {
+            "handle": "wp-block-post-template",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-post-template-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-query-theme",
+            "source": ""
+          },
+          {
+            "handle": "wc-blocks-style-product-query",
+            "source": "product-query.css"
+          },
+          {
+            "handle": "wp-block-social-link",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-social-link-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-social-links",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-social-links-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-list-item",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-list-item-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-list",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-list-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-shortcode",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-shortcode-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-button",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-button-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-buttons",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-buttons-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-library",
+            "source": ""
+          },
+          {
+            "handle": "woocommerce-blocktheme",
+            "source": "woocommerce-blocktheme.css"
+          },
+          {
+            "handle": "global-styles",
+            "source": ""
+          },
+          {
+            "handle": "core-block-supports",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-template-skip-link",
+            "source": ""
+          },
+          {
+            "handle": "woocommerce-layout",
+            "source": "woocommerce-layout.css"
+          },
+          {
+            "handle": "woocommerce-smallscreen",
+            "source": "woocommerce-smallscreen.css"
+          },
+          {
+            "handle": "woocommerce-general",
+            "source": "woocommerce.css"
+          },
+          {
+            "handle": "woocommerce-inline",
+            "source": ""
+          },
+          {
+            "handle": "jadro-style",
+            "source": "style.css"
+          },
+          {
+            "handle": "jadro-woocommerce",
+            "source": "woocommerce.css"
+          },
+          {
+            "handle": "yay-currency-frontend-style",
+            "source": "styles.css"
+          },
+          {
+            "handle": "photoswipe-default-skin",
+            "source": "default-skin.min.css"
+          },
+          {
+            "handle": "wpo_min-header-0",
+            "source": "wpo-minify-header-0796a715.min.css"
+          },
+          {
+            "handle": "wpo_min-header-1",
+            "source": "wpo-minify-header-eebb1416.min.css"
+          },
+          {
+            "handle": "wpo_min-header-2",
+            "source": "wpo-minify-header-cc0f4067.min.css"
+          },
+          {
+            "handle": "wp-interactivity-router-animations",
+            "source": ""
+          },
+          {
+            "handle": "wc-blocks-checkout-style",
+            "source": "blocks-checkout.css"
+          },
+          {
+            "handle": "wpo_min-footer-0",
+            "source": "wpo-minify-footer-effa1413.min.css"
+          }
+        ]
+      },
+      "cache": {
+        "wp_cache_constant": true,
+        "advanced_cache_dropin": true,
+        "object_cache_dropin": true,
+        "external_object_cache": false,
+        "object_cache_class": "WP_Object_Cache",
+        "htaccess_exists": true,
+        "htaccess_has_expires_rules": true,
+        "htaccess_has_cache_control_rules": true,
+        "wp_optimize_options": [
+          {
+            "name": "wp-optimize-auto",
+            "bytes": 215,
+            "keys": [
+              "revisions",
+              "trash",
+              "drafts",
+              "unapproved",
+              "optimize",
+              "usermeta",
+              "spams",
+              "transient"
+            ]
+          },
+          {
+            "name": "wp-optimize-autosmush",
+            "bytes": 0,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-back_up_delete_after",
+            "bytes": 0,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-back_up_delete_after_days",
+            "bytes": 2,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-back_up_original",
+            "bytes": 1,
+            "scalar": "1"
+          },
+          {
+            "name": "wp-optimize-browser_cache_error_message",
+            "bytes": 0,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-browser_cache_expire_days",
+            "bytes": 2,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-browser_cache_expire_hours",
+            "bytes": 1,
+            "scalar": "0"
+          },
+          {
+            "name": "wp-optimize-browser_cache_output",
+            "bytes": 0,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-completed_task_count",
+            "bytes": 3,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-compression_server",
+            "bytes": 9,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-corrupted-tables-count",
+            "bytes": 1,
+            "scalar": "0"
+          },
+          {
+            "name": "wp-optimize-dismiss_dash_notice_until",
+            "bytes": 10,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-dismiss_notice",
+            "bytes": 10,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-enable_browser_cache",
+            "bytes": 1,
+            "scalar": "1"
+          },
+          {
+            "name": "wp-optimize-enable-admin-menu",
+            "bytes": 5,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-image_quality",
+            "bytes": 2,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-install-or-update-notice-version",
+            "bytes": 3,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-installed-for",
+            "bytes": 10,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-is_gzip_compression_enabled",
+            "bytes": 4,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-last-optimized",
+            "bytes": 5,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-retention-enabled",
+            "bytes": 5,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-retention-period",
+            "bytes": 1,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-schedule",
+            "bytes": 5,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-schedule-type",
+            "bytes": 10,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-settings",
+            "bytes": 577,
+            "keys": [
+              "user-revisions",
+              "user-trash",
+              "user-orphandata",
+              "user-pingbacks",
+              "user-orphanedtables",
+              "user-attachments",
+              "user-trackbacks",
+              "user-commentmeta",
+              "user-postmeta",
+              "user-drafts",
+              "user-unapproved",
+              "user-optimize",
+              "user-usermeta",
+              "user-repairtables",
+              "user-spams",
+              "user-transient",
+              "last_saved_in"
+            ]
+          },
+          {
+            "name": "wp-optimize-show_smush_metabox",
+            "bytes": 4,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-total_bytes_saved",
+            "bytes": 8,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-total_percent_saved",
+            "bytes": 15,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-total-cleaned",
+            "bytes": 1,
+            "scalar": "0"
+          },
+          {
+            "name": "wp-optimize-total-cleaned-current-month",
+            "bytes": 1,
+            "scalar": "0"
+          },
+          {
+            "name": "wp-optimize-total-cleaned-previous-month",
+            "bytes": 1,
+            "scalar": "0"
+          },
+          {
+            "name": "wp-optimize-wpo_last_minify_preload",
+            "bytes": 10,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-wpo_last_minify_preload_type",
+            "bytes": 7,
+            "scalar": null
+          },
+          {
+            "name": "wpo_cache_config",
+            "bytes": 1609,
+            "keys": [
+              "enable_page_caching",
+              "page_cache_length_value",
+              "page_cache_length_unit",
+              "page_cache_length",
+              "cache_exception_conditional_tags",
+              "cache_specific_urls_only",
+              "cache_include_urls",
+              "cache_exception_urls",
+              "cache_ignore_query_variables",
+              "cache_exception_cookies",
+              "cache_exception_browser_agents",
+              "enable_sitemap_preload",
+              "enable_schedule_preload",
+              "preload_schedule_type",
+              "enable_mobile_caching",
+              "enable_user_caching",
+              "site_url",
+              "enable_cache_per_country",
+              "enable_cache_aelia_currency",
+              "permalink_structure",
+              "uploads",
+              "gmt_offset",
+              "timezone_string",
+              "date_format",
+              "time_format",
+              "use_webp_images",
+              "host_gravatars_locally",
+              "auto_preload_purged_contents",
+              "enable_rest_caching",
+              "last_cleared"
+            ],
+            "enable_page_caching": true
+          },
+          {
+            "name": "wpo_minify_config",
+            "bytes": 1979,
+            "keys": [
+              "debug",
+              "enabled_css_preload",
+              "enabled_js_preload",
+              "hpreconnect",
+              "hpreload",
+              "loadcss",
+              "remove_css",
+              "critical_path_css",
+              "critical_path_css_is_front_page",
+              "preserve_settings_on_uninstall",
+              "disable_when_logged_in",
+              "default_protocol",
+              "html_minification",
+              "clean_header_one",
+              "emoji_removal",
+              "merge_google_fonts",
+              "enable_display_swap",
+              "remove_googlefonts",
+              "host_local_google_fonts",
+              "disable_google_fonts_processing",
+              "gfonts_method",
+              "fawesome_method",
+              "enable_css",
+              "enable_css_minification",
+              "enable_merging_of_css",
+              "remove_print_mediatypes",
+              "inline_css",
+              "enable_js",
+              "enable_js_minification",
+              "enable_merging_of_js"
+            ],
+            "enabled": true
+          },
+          {
+            "name": "wpo_update_version",
+            "bytes": 5,
+            "scalar": null
+          },
+          {
+            "name": "wpo_version",
+            "bytes": 5,
+            "scalar": null
+          }
+        ]
+      },
+      "database": {
+        "autoloaded_options_bytes": 476302,
+        "recorded_query_seconds": 0.164,
+        "slow_callers": [
+          {
+            "caller": "require('wp-blog-header.php'), require_once('wp-load.php'), require_once('wp-config.php'), require_once('wp-settings.php'), do_action('init'), WP_Hook->do_action, WP_Hook->apply_fi",
+            "queries": 125,
+            "milliseconds": 14.7
+          },
+          {
+            "caller": "require('wp-blog-header.php'), require_once('wp-includes/template-loader.php'), include('wp-includes/template-canvas.php'), wp_head, do_action('wp_head'), WP_Hook->do_action, WP_Ho",
+            "queries": 3,
+            "milliseconds": 12.4
+          },
+          {
+            "caller": "require('wp-blog-header.php'), require_once('wp-includes/template-loader.php'), include('wp-includes/template-canvas.php'), get_the_block_template_html, do_blocks, render_block, WP",
+            "queries": 2,
+            "milliseconds": 5.7
+          },
+          {
+            "caller": "require('wp-blog-header.php'), require_once('wp-includes/template-loader.php'), include('wp-includes/template-canvas.php'), get_the_block_template_html, do_blocks, render_block, WP",
+            "queries": 2,
+            "milliseconds": 4.9
+          },
+          {
+            "caller": "require('wp-blog-header.php'), require_once('wp-includes/template-loader.php'), include('wp-includes/template-canvas.php'), get_the_block_template_html, do_blocks, render_block, WP",
+            "queries": 1,
+            "milliseconds": 4.6
+          },
+          {
+            "caller": "require('wp-blog-header.php'), require_once('wp-includes/template-loader.php'), do_action('template_redirect'), WP_Hook->do_action, WP_Hook->apply_filters, Automattic\\WooCommerce\\B",
             "queries": 3,
             "milliseconds": 3.5
           },
           {
             "caller": "require('wp-blog-header.php'), require_once('wp-load.php'), require_once('wp-config.php'), require_once('wp-settings.php'), do_action('plugins_loaded'), WP_Hook->do_action, WP_Hook",
             "queries": 2,
-            "milliseconds": 3
+            "milliseconds": 3.4
           },
           {
-            "caller": "require('wp-blog-header.php'), require_once('wp-includes/template-loader.php'), include('wp-includes/template-canvas.php'), get_the_block_template_html, do_blocks, render_block, WP",
-            "queries": 9,
-            "milliseconds": 2.7
+            "caller": "require('wp-blog-header.php'), require_once('wp-includes/template-loader.php'), include('wp-includes/template-canvas.php'), wp_head, do_action('wp_head'), WP_Hook->do_action, WP_Ho",
+            "queries": 1,
+            "milliseconds": 3.2
           },
           {
-            "caller": "require('wp-blog-header.php'), require_once('wp-includes/template-loader.php'), include('wp-includes/template-canvas.php'), get_the_block_template_html, do_blocks, render_block, WP",
+            "caller": "shutdown_action_hook, do_action('shutdown'), WP_Hook->do_action, WP_Hook->apply_filters, {closure}",
             "queries": 2,
-            "milliseconds": 2.3
+            "milliseconds": 2.6
           },
           {
             "caller": "require('wp-blog-header.php'), require_once('wp-includes/template-loader.php'), include('wp-includes/template-canvas.php'), get_the_block_template_html, do_blocks, render_block, WP",
-            "queries": 8,
+            "queries": 1,
+            "milliseconds": 2.4
+          },
+          {
+            "caller": "require('wp-blog-header.php'), require_once('wp-includes/template-loader.php'), apply_filters('template_include'), WP_Hook->apply_filters, Automattic\\WooCommerce\\Blocks\\Templates\\A",
+            "queries": 1,
+            "milliseconds": 2.4
+          },
+          {
+            "caller": "require('wp-blog-header.php'), require_once('wp-includes/template-loader.php'), include('wp-includes/template-canvas.php'), get_the_block_template_html, do_blocks, render_block, WP",
+            "queries": 1,
             "milliseconds": 2.2
           }
         ]
@@ -411,7 +1609,3239 @@
         "slow_plugin_load_intervals": [
           {
             "plugin": "wpforms-lite/wpforms.php",
-            "milliseconds": 277.4
+            "milliseconds": 254.7
+          },
+          {
+            "plugin": "woocommerce/woocommerce.php",
+            "milliseconds": 137
+          },
+          {
+            "plugin": "woocommerce-payments/woocommerce-payments.php",
+            "milliseconds": 59.8
+          },
+          {
+            "plugin": "packeta/packeta.php",
+            "milliseconds": 48.9
+          },
+          {
+            "plugin": "open-user-map/open-user-map.php",
+            "milliseconds": 40.2
+          },
+          {
+            "plugin": "woocommerce-pay-for-payment/woocommerce-payforpayment.php",
+            "milliseconds": 18.6
+          },
+          {
+            "plugin": "wordpress-seo/wp-seo.php",
+            "milliseconds": 17.6
+          },
+          {
+            "plugin": "cookie-law-info/cookie-law-info.php",
+            "milliseconds": 17
+          },
+          {
+            "plugin": "woo-stripe-payment/stripe-payments.php",
+            "milliseconds": 16.9
+          },
+          {
+            "plugin": "google-site-kit/google-site-kit.php",
+            "milliseconds": 13.9
+          },
+          {
+            "plugin": "wp-optimize/wp-optimize.php",
+            "milliseconds": 7.8
+          },
+          {
+            "plugin": "WC-Doprava-main/wcdoprava.php",
+            "milliseconds": 5.9
+          }
+        ],
+        "http_calls": [],
+        "slow_hook_intervals": [
+          {
+            "after_hook": "woocommerce_log_directory",
+            "milliseconds": 39.9
+          },
+          {
+            "after_hook": "transient_jetpack_autoloader_plugin_paths",
+            "milliseconds": 37.9
+          },
+          {
+            "after_hook": "default_option_packetery_advanced",
+            "milliseconds": 34.3
+          },
+          {
+            "after_hook": "wc_payments_api_client",
+            "milliseconds": 28.2
+          },
+          {
+            "after_hook": "option_fs_debug_mode",
+            "milliseconds": 27
+          },
+          {
+            "after_hook": "default_option_woocommerce_force_ssl_checkout",
+            "milliseconds": 23.2
+          },
+          {
+            "after_hook": "log_query_custom_data",
+            "milliseconds": 22.4
+          },
+          {
+            "after_hook": "stylesheet",
+            "milliseconds": 22
+          },
+          {
+            "after_hook": "log_query_custom_data",
+            "milliseconds": 21.4
+          },
+          {
+            "after_hook": "wp_doing_ajax",
+            "milliseconds": 20.4
+          }
+        ]
+      }
+    },
+    "cart_en": {
+      "schema": 1,
+      "uri": "/en/cart/?jamu_bridge=performance-audit",
+      "context": {
+        "home": false,
+        "product": false,
+        "cart": true,
+        "checkout": false
+      },
+      "metrics": {
+        "wordpress_seconds": 4.838,
+        "database_queries": 496,
+        "memory_peak_bytes": 207618048,
+        "scripts_enqueued": 90,
+        "styles_enqueued": 60,
+        "set_cookie_headers": 0,
+        "scripts": [
+          {
+            "handle": "WCPAY_ASSETS",
+            "source": ""
+          },
+          {
+            "handle": "jquery",
+            "source": ""
+          },
+          {
+            "handle": "cookie-law-info",
+            "source": "script.min.js"
+          },
+          {
+            "handle": "jquery-core",
+            "source": "jquery.min.js"
+          },
+          {
+            "handle": "jquery-migrate",
+            "source": "jquery-migrate.min.js"
+          },
+          {
+            "handle": "wc-jquery-blockui",
+            "source": "jquery.blockUI.min.js"
+          },
+          {
+            "handle": "wc-add-to-cart",
+            "source": "add-to-cart.min.js"
+          },
+          {
+            "handle": "wc-js-cookie",
+            "source": "js.cookie.min.js"
+          },
+          {
+            "handle": "google_gtagjs",
+            "source": "js"
+          },
+          {
+            "handle": "wp-polyfill",
+            "source": "wp-polyfill.min.js"
+          },
+          {
+            "handle": "wp-hooks",
+            "source": "hooks.min.js"
+          },
+          {
+            "handle": "wp-i18n",
+            "source": "i18n.min.js"
+          },
+          {
+            "handle": "wc-cart-checkout-base",
+            "source": "wc-cart-checkout-base-frontend.js"
+          },
+          {
+            "handle": "wc-cart-checkout-vendors",
+            "source": "wc-cart-checkout-vendors-frontend.js"
+          },
+          {
+            "handle": "react",
+            "source": "react.min.js"
+          },
+          {
+            "handle": "react-jsx-runtime",
+            "source": "react-jsx-runtime.min.js"
+          },
+          {
+            "handle": "react-dom",
+            "source": "react-dom.min.js"
+          },
+          {
+            "handle": "wc-types",
+            "source": "wc-types.js"
+          },
+          {
+            "handle": "wc-blocks-checkout-events",
+            "source": "blocks-checkout-events.js"
+          },
+          {
+            "handle": "wp-private-apis",
+            "source": "private-apis.min.js"
+          },
+          {
+            "handle": "wp-url",
+            "source": "url.min.js"
+          },
+          {
+            "handle": "wp-api-fetch",
+            "source": "api-fetch.min.js"
+          },
+          {
+            "handle": "wc-settings",
+            "source": "wc-settings.js"
+          },
+          {
+            "handle": "wp-deprecated",
+            "source": "deprecated.min.js"
+          },
+          {
+            "handle": "wp-dom",
+            "source": "dom.min.js"
+          },
+          {
+            "handle": "wp-escape-html",
+            "source": "escape-html.min.js"
+          },
+          {
+            "handle": "wp-element",
+            "source": "element.min.js"
+          },
+          {
+            "handle": "wp-is-shallow-equal",
+            "source": "is-shallow-equal.min.js"
+          },
+          {
+            "handle": "wp-keycodes",
+            "source": "keycodes.min.js"
+          },
+          {
+            "handle": "wp-priority-queue",
+            "source": "priority-queue.min.js"
+          },
+          {
+            "handle": "wp-undo-manager",
+            "source": "undo-manager.min.js"
+          },
+          {
+            "handle": "wp-compose",
+            "source": "compose.min.js"
+          },
+          {
+            "handle": "wp-redux-routine",
+            "source": "redux-routine.min.js"
+          },
+          {
+            "handle": "wp-data",
+            "source": "data.min.js"
+          },
+          {
+            "handle": "wc-blocks-registry",
+            "source": "wc-blocks-registry.js"
+          },
+          {
+            "handle": "wp-data-controls",
+            "source": "data-controls.min.js"
+          },
+          {
+            "handle": "wp-html-entities",
+            "source": "html-entities.min.js"
+          },
+          {
+            "handle": "wp-dom-ready",
+            "source": "dom-ready.min.js"
+          },
+          {
+            "handle": "wp-a11y",
+            "source": "a11y.min.js"
+          },
+          {
+            "handle": "moment",
+            "source": "moment.min.js"
+          },
+          {
+            "handle": "wp-date",
+            "source": "date.min.js"
+          },
+          {
+            "handle": "wp-primitives",
+            "source": "primitives.min.js"
+          },
+          {
+            "handle": "wp-rich-text",
+            "source": "rich-text.min.js"
+          },
+          {
+            "handle": "wp-theme",
+            "source": "theme.min.js"
+          },
+          {
+            "handle": "wp-warning",
+            "source": "warning.min.js"
+          },
+          {
+            "handle": "wp-components",
+            "source": "components.min.js"
+          },
+          {
+            "handle": "wp-notices",
+            "source": "notices.min.js"
+          },
+          {
+            "handle": "wc-blocks-middleware",
+            "source": "wc-blocks-middleware.js"
+          },
+          {
+            "handle": "wc-blocks-data-store",
+            "source": "wc-blocks-data.js"
+          },
+          {
+            "handle": "wc-sanitize",
+            "source": "index.js"
+          },
+          {
+            "handle": "wc-blocks-components",
+            "source": "blocks-components.js"
+          },
+          {
+            "handle": "wc-blocks-checkout",
+            "source": "blocks-checkout.js"
+          },
+          {
+            "handle": "wc-blocks-shared-context",
+            "source": "wc-blocks-shared-context.js"
+          },
+          {
+            "handle": "wc-blocks-shared-hocs",
+            "source": "wc-blocks-shared-hocs.js"
+          },
+          {
+            "handle": "wc-price-format",
+            "source": "price-format.js"
+          },
+          {
+            "handle": "wp-autop",
+            "source": "autop.min.js"
+          },
+          {
+            "handle": "wp-plugins",
+            "source": "plugins.min.js"
+          },
+          {
+            "handle": "wp-style-engine",
+            "source": "style-engine.min.js"
+          },
+          {
+            "handle": "wp-wordcount",
+            "source": "wordcount.min.js"
+          },
+          {
+            "handle": "woocommerce-services-store-notices",
+            "source": "woocommerce-services-store-notices-3.7.0.js"
+          },
+          {
+            "handle": "wc-payment-method-bacs",
+            "source": "wc-payment-method-bacs.js"
+          },
+          {
+            "handle": "wc-payment-method-cod",
+            "source": "wc-payment-method-cod.js"
+          },
+          {
+            "handle": "wc-stripe-blocks-vendors",
+            "source": "wc-stripe-blocks-vendors.js"
+          },
+          {
+            "handle": "wc-stripe-blocks-utils",
+            "source": "blocks-utils.js"
+          },
+          {
+            "handle": "wc-stripe-blocks-components",
+            "source": "blocks-components.js"
+          },
+          {
+            "handle": "wc-stripe-blocks-express-checkout",
+            "source": "blocks-express-checkout.js"
+          },
+          {
+            "handle": "wc-stripe-blocks-googlepay",
+            "source": "wc-stripe-googlepay.js"
+          },
+          {
+            "handle": "wc-stripe-blocks-apple-pay",
+            "source": "wc-stripe-apple-pay.js"
+          },
+          {
+            "handle": "wc-stripe-block-local-payment",
+            "source": "wc-stripe-local-payment.js"
+          },
+          {
+            "handle": "lodash",
+            "source": "lodash.min.js"
+          },
+          {
+            "handle": "stripe",
+            "source": "v3"
+          },
+          {
+            "handle": "WCPAY_BLOCKS_CHECKOUT",
+            "source": "blocks-checkout.js"
+          },
+          {
+            "handle": "wc-cart-block-frontend",
+            "source": "cart-frontend.js"
+          },
+          {
+            "handle": "awdr-main",
+            "source": "site_main.js"
+          },
+          {
+            "handle": "awdr-dynamic-price",
+            "source": "awdr-dynamic-price.js"
+          },
+          {
+            "handle": "ecomail",
+            "source": "plugin.js"
+          },
+          {
+            "handle": "WCPAY_CART",
+            "source": "cart.js"
+          },
+          {
+            "handle": "WCPAY_CART_BLOCK",
+            "source": "cart-block.js"
+          },
+          {
+            "handle": "sourcebuster-js",
+            "source": "sourcebuster.min.js"
+          },
+          {
+            "handle": "wc-order-attribution",
+            "source": "order-attribution.min.js"
+          },
+          {
+            "handle": "yay-currency-callback-general",
+            "source": "general.helper.min.js"
+          },
+          {
+            "handle": "yay-currency-callback-blocks",
+            "source": "blocks.helper.min.js"
+          },
+          {
+            "handle": "yay-currency-frontend-script",
+            "source": "script.min.js"
+          },
+          {
+            "handle": "yay-currency-third-party",
+            "source": "third-party.min.js"
+          },
+          {
+            "handle": "yay-currency-woo-blocks",
+            "source": "woocommerce-blocks.min.js"
+          },
+          {
+            "handle": "googlesitekit-events-provider-content-events",
+            "source": "googlesitekit-events-provider-content-events-c7172f3fd0e4d5ad62ef.js"
+          },
+          {
+            "handle": "woocommerce",
+            "source": "woocommerce.min.js"
+          },
+          {
+            "handle": "googlesitekit-events-provider-woocommerce",
+            "source": "googlesitekit-events-provider-woocommerce-86c5a3ff303665006998.js"
+          },
+          {
+            "handle": "googlesitekit-events-provider-wpforms",
+            "source": "googlesitekit-events-provider-wpforms-fdbd42f50702ca1e0c36.js"
+          },
+          {
+            "handle": "wcpay-frontend-tracks",
+            "source": "frontend-tracks.js"
+          }
+        ],
+        "styles": [
+          {
+            "handle": "wp-img-auto-sizes-contain",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-image",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-image-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-navigation-link",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-navigation-link-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-navigation-submenu",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-navigation-submenu-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-navigation",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-navigation-theme",
+            "source": ""
+          },
+          {
+            "handle": "woocommerce-mini-cart-style",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-group",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-group-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-template-part",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-template-part-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-heading",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-heading-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-separator",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-separator-theme",
+            "source": ""
+          },
+          {
+            "handle": "wc-blocks-style",
+            "source": "wc-blocks.css"
+          },
+          {
+            "handle": "wc-blocks-style-all-products",
+            "source": "all-products.css"
+          },
+          {
+            "handle": "wc-blocks-checkout-style",
+            "source": "blocks-checkout.css"
+          },
+          {
+            "handle": "wc-stripe-blocks-styles",
+            "source": "style.css"
+          },
+          {
+            "handle": "wc-blocks-style-cart",
+            "source": "cart.css"
+          },
+          {
+            "handle": "wc-blocks-packages-style",
+            "source": "packages-style.css"
+          },
+          {
+            "handle": "wp-block-paragraph",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-paragraph-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-social-link",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-social-link-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-social-links",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-social-links-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-list-item",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-list-item-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-list",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-list-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-shortcode",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-shortcode-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-column",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-column-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-button",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-button-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-buttons",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-buttons-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-columns",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-columns-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-library",
+            "source": ""
+          },
+          {
+            "handle": "woocommerce-blocktheme",
+            "source": "woocommerce-blocktheme.css"
+          },
+          {
+            "handle": "global-styles",
+            "source": ""
+          },
+          {
+            "handle": "core-block-supports",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-template-skip-link",
+            "source": ""
+          },
+          {
+            "handle": "woocommerce-layout",
+            "source": "woocommerce-layout.css"
+          },
+          {
+            "handle": "woocommerce-smallscreen",
+            "source": "woocommerce-smallscreen.css"
+          },
+          {
+            "handle": "woocommerce-general",
+            "source": "woocommerce.css"
+          },
+          {
+            "handle": "woocommerce-inline",
+            "source": ""
+          },
+          {
+            "handle": "WCPAY_CART_BLOCK",
+            "source": "cart-block.css"
+          },
+          {
+            "handle": "jadro-style",
+            "source": "style.css"
+          },
+          {
+            "handle": "jadro-woocommerce",
+            "source": "woocommerce.css"
+          },
+          {
+            "handle": "yay-currency-frontend-style",
+            "source": "styles.css"
+          },
+          {
+            "handle": "wpo_min-header-0",
+            "source": "wpo-minify-header-d0e9672c.min.css"
+          },
+          {
+            "handle": "wpo_min-header-1",
+            "source": "wpo-minify-header-eebb1416.min.css"
+          },
+          {
+            "handle": "wpo_min-header-2",
+            "source": "wpo-minify-header-6c3b3597.min.css"
+          }
+        ]
+      },
+      "cache": {
+        "wp_cache_constant": true,
+        "advanced_cache_dropin": true,
+        "object_cache_dropin": true,
+        "external_object_cache": false,
+        "object_cache_class": "WP_Object_Cache",
+        "htaccess_exists": true,
+        "htaccess_has_expires_rules": true,
+        "htaccess_has_cache_control_rules": true,
+        "wp_optimize_options": [
+          {
+            "name": "wp-optimize-auto",
+            "bytes": 215,
+            "keys": [
+              "revisions",
+              "trash",
+              "drafts",
+              "unapproved",
+              "optimize",
+              "usermeta",
+              "spams",
+              "transient"
+            ]
+          },
+          {
+            "name": "wp-optimize-autosmush",
+            "bytes": 0,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-back_up_delete_after",
+            "bytes": 0,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-back_up_delete_after_days",
+            "bytes": 2,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-back_up_original",
+            "bytes": 1,
+            "scalar": "1"
+          },
+          {
+            "name": "wp-optimize-browser_cache_error_message",
+            "bytes": 0,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-browser_cache_expire_days",
+            "bytes": 2,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-browser_cache_expire_hours",
+            "bytes": 1,
+            "scalar": "0"
+          },
+          {
+            "name": "wp-optimize-browser_cache_output",
+            "bytes": 0,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-completed_task_count",
+            "bytes": 3,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-compression_server",
+            "bytes": 9,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-corrupted-tables-count",
+            "bytes": 1,
+            "scalar": "0"
+          },
+          {
+            "name": "wp-optimize-dismiss_dash_notice_until",
+            "bytes": 10,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-dismiss_notice",
+            "bytes": 10,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-enable_browser_cache",
+            "bytes": 1,
+            "scalar": "1"
+          },
+          {
+            "name": "wp-optimize-enable-admin-menu",
+            "bytes": 5,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-image_quality",
+            "bytes": 2,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-install-or-update-notice-version",
+            "bytes": 3,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-installed-for",
+            "bytes": 10,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-is_gzip_compression_enabled",
+            "bytes": 4,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-last-optimized",
+            "bytes": 5,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-retention-enabled",
+            "bytes": 5,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-retention-period",
+            "bytes": 1,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-schedule",
+            "bytes": 5,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-schedule-type",
+            "bytes": 10,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-settings",
+            "bytes": 577,
+            "keys": [
+              "user-revisions",
+              "user-trash",
+              "user-orphandata",
+              "user-pingbacks",
+              "user-orphanedtables",
+              "user-attachments",
+              "user-trackbacks",
+              "user-commentmeta",
+              "user-postmeta",
+              "user-drafts",
+              "user-unapproved",
+              "user-optimize",
+              "user-usermeta",
+              "user-repairtables",
+              "user-spams",
+              "user-transient",
+              "last_saved_in"
+            ]
+          },
+          {
+            "name": "wp-optimize-show_smush_metabox",
+            "bytes": 4,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-total_bytes_saved",
+            "bytes": 8,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-total_percent_saved",
+            "bytes": 15,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-total-cleaned",
+            "bytes": 1,
+            "scalar": "0"
+          },
+          {
+            "name": "wp-optimize-total-cleaned-current-month",
+            "bytes": 1,
+            "scalar": "0"
+          },
+          {
+            "name": "wp-optimize-total-cleaned-previous-month",
+            "bytes": 1,
+            "scalar": "0"
+          },
+          {
+            "name": "wp-optimize-wpo_last_minify_preload",
+            "bytes": 10,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-wpo_last_minify_preload_type",
+            "bytes": 7,
+            "scalar": null
+          },
+          {
+            "name": "wpo_cache_config",
+            "bytes": 1609,
+            "keys": [
+              "enable_page_caching",
+              "page_cache_length_value",
+              "page_cache_length_unit",
+              "page_cache_length",
+              "cache_exception_conditional_tags",
+              "cache_specific_urls_only",
+              "cache_include_urls",
+              "cache_exception_urls",
+              "cache_ignore_query_variables",
+              "cache_exception_cookies",
+              "cache_exception_browser_agents",
+              "enable_sitemap_preload",
+              "enable_schedule_preload",
+              "preload_schedule_type",
+              "enable_mobile_caching",
+              "enable_user_caching",
+              "site_url",
+              "enable_cache_per_country",
+              "enable_cache_aelia_currency",
+              "permalink_structure",
+              "uploads",
+              "gmt_offset",
+              "timezone_string",
+              "date_format",
+              "time_format",
+              "use_webp_images",
+              "host_gravatars_locally",
+              "auto_preload_purged_contents",
+              "enable_rest_caching",
+              "last_cleared"
+            ],
+            "enable_page_caching": true
+          },
+          {
+            "name": "wpo_minify_config",
+            "bytes": 1979,
+            "keys": [
+              "debug",
+              "enabled_css_preload",
+              "enabled_js_preload",
+              "hpreconnect",
+              "hpreload",
+              "loadcss",
+              "remove_css",
+              "critical_path_css",
+              "critical_path_css_is_front_page",
+              "preserve_settings_on_uninstall",
+              "disable_when_logged_in",
+              "default_protocol",
+              "html_minification",
+              "clean_header_one",
+              "emoji_removal",
+              "merge_google_fonts",
+              "enable_display_swap",
+              "remove_googlefonts",
+              "host_local_google_fonts",
+              "disable_google_fonts_processing",
+              "gfonts_method",
+              "fawesome_method",
+              "enable_css",
+              "enable_css_minification",
+              "enable_merging_of_css",
+              "remove_print_mediatypes",
+              "inline_css",
+              "enable_js",
+              "enable_js_minification",
+              "enable_merging_of_js"
+            ],
+            "enabled": true
+          },
+          {
+            "name": "wpo_update_version",
+            "bytes": 5,
+            "scalar": null
+          },
+          {
+            "name": "wpo_version",
+            "bytes": 5,
+            "scalar": null
+          }
+        ]
+      },
+      "database": {
+        "autoloaded_options_bytes": 476283,
+        "recorded_query_seconds": 0.126,
+        "slow_callers": [
+          {
+            "caller": "require('wp-blog-header.php'), require_once('wp-load.php'), require_once('wp-config.php'), require_once('wp-settings.php'), do_action('init'), WP_Hook->do_action, WP_Hook->apply_fi",
+            "queries": 125,
+            "milliseconds": 9
+          },
+          {
+            "caller": "require('wp-blog-header.php'), require_once('wp-includes/template-loader.php'), include('wp-includes/template-canvas.php'), wp_head, do_action('wp_head'), WP_Hook->do_action, WP_Ho",
+            "queries": 1,
+            "milliseconds": 7.6
+          },
+          {
+            "caller": "require('wp-blog-header.php'), require_once('wp-load.php'), require_once('wp-config.php'), require_once('wp-settings.php'), do_action('init'), WP_Hook->do_action, WP_Hook->apply_fi",
+            "queries": 1,
+            "milliseconds": 6.6
+          },
+          {
+            "caller": "require('wp-blog-header.php'), require_once('wp-includes/template-loader.php'), include('wp-includes/template-canvas.php'), get_the_block_template_html, do_blocks, render_block, WP",
+            "queries": 1,
+            "milliseconds": 5.1
+          },
+          {
+            "caller": "require('wp-blog-header.php'), require_once('wp-includes/template-loader.php'), include('wp-includes/template-canvas.php'), get_the_block_template_html, do_blocks, render_block, WP",
+            "queries": 1,
+            "milliseconds": 3.6
+          },
+          {
+            "caller": "shutdown_action_hook, do_action('shutdown'), WP_Hook->do_action, WP_Hook->apply_filters, {closure}",
+            "queries": 2,
+            "milliseconds": 3.2
+          },
+          {
+            "caller": "require('wp-blog-header.php'), require_once('wp-includes/template-loader.php'), include('wp-includes/template-canvas.php'), get_the_block_template_html, do_blocks, render_block, WP",
+            "queries": 3,
+            "milliseconds": 3.1
+          },
+          {
+            "caller": "require('wp-blog-header.php'), require_once('wp-includes/template-loader.php'), include('wp-includes/template-canvas.php'), get_the_block_template_html, do_blocks, render_block, WP",
+            "queries": 2,
+            "milliseconds": 3
+          },
+          {
+            "caller": "require('wp-blog-header.php'), require_once('wp-includes/template-loader.php'), get_page_template, get_query_template, locate_block_template, resolve_block_template, get_block_temp",
+            "queries": 1,
+            "milliseconds": 2.3
+          },
+          {
+            "caller": "require('wp-blog-header.php'), require_once('wp-includes/template-loader.php'), include('wp-includes/template-canvas.php'), get_the_block_template_html, do_blocks, render_block, WP",
+            "queries": 8,
+            "milliseconds": 1.7
+          },
+          {
+            "caller": "require('wp-blog-header.php'), require_once('wp-includes/template-loader.php'), include('wp-includes/template-canvas.php'), get_the_block_template_html, do_blocks, render_block, WP",
+            "queries": 4,
+            "milliseconds": 1.7
+          },
+          {
+            "caller": "require('wp-blog-header.php'), require_once('wp-includes/template-loader.php'), include('wp-includes/template-canvas.php'), get_the_block_template_html, do_blocks, render_block, WP",
+            "queries": 2,
+            "milliseconds": 1.6
+          }
+        ]
+      },
+      "runtime": {
+        "slow_plugin_load_intervals": [
+          {
+            "plugin": "wpforms-lite/wpforms.php",
+            "milliseconds": 269.8
+          },
+          {
+            "plugin": "woocommerce/woocommerce.php",
+            "milliseconds": 141.4
+          },
+          {
+            "plugin": "woocommerce-payments/woocommerce-payments.php",
+            "milliseconds": 58
+          },
+          {
+            "plugin": "packeta/packeta.php",
+            "milliseconds": 54.4
+          },
+          {
+            "plugin": "open-user-map/open-user-map.php",
+            "milliseconds": 40.8
+          },
+          {
+            "plugin": "woocommerce-pay-for-payment/woocommerce-payforpayment.php",
+            "milliseconds": 19.4
+          },
+          {
+            "plugin": "wordpress-seo/wp-seo.php",
+            "milliseconds": 18.2
+          },
+          {
+            "plugin": "woo-stripe-payment/stripe-payments.php",
+            "milliseconds": 17.9
+          },
+          {
+            "plugin": "cookie-law-info/cookie-law-info.php",
+            "milliseconds": 17.8
+          },
+          {
+            "plugin": "google-site-kit/google-site-kit.php",
+            "milliseconds": 13.8
+          },
+          {
+            "plugin": "wp-optimize/wp-optimize.php",
+            "milliseconds": 8.5
+          },
+          {
+            "plugin": "insert-headers-and-footers/ihaf.php",
+            "milliseconds": 5.9
+          }
+        ],
+        "http_calls": [],
+        "slow_hook_intervals": [
+          {
+            "after_hook": "woocommerce_log_directory",
+            "milliseconds": 40.6
+          },
+          {
+            "after_hook": "woocommerce_currency_symbols",
+            "milliseconds": 39.8
+          },
+          {
+            "after_hook": "default_option_packetery_advanced",
+            "milliseconds": 38.9
+          },
+          {
+            "after_hook": "transient_jetpack_autoloader_plugin_paths",
+            "milliseconds": 37.6
+          },
+          {
+            "after_hook": "wp_theme_json_data_default",
+            "milliseconds": 35.4
+          },
+          {
+            "after_hook": "wc_payments_api_client",
+            "milliseconds": 31.8
+          },
+          {
+            "after_hook": "option_fs_debug_mode",
+            "milliseconds": 26.9
+          },
+          {
+            "after_hook": "default_option_woocommerce_force_ssl_checkout",
+            "milliseconds": 23.9
+          },
+          {
+            "after_hook": "log_query_custom_data",
+            "milliseconds": 23.6
+          },
+          {
+            "after_hook": "stylesheet",
+            "milliseconds": 21.8
+          },
+          {
+            "after_hook": "wp_doing_ajax",
+            "milliseconds": 21.1
+          }
+        ]
+      }
+    },
+    "checkout_en": {
+      "schema": 1,
+      "uri": "/en/cart/",
+      "context": {
+        "home": false,
+        "product": false,
+        "cart": true,
+        "checkout": false
+      },
+      "metrics": {
+        "wordpress_seconds": 4.744,
+        "database_queries": 500,
+        "memory_peak_bytes": 207618048,
+        "scripts_enqueued": 90,
+        "styles_enqueued": 60,
+        "set_cookie_headers": 0,
+        "scripts": [
+          {
+            "handle": "WCPAY_ASSETS",
+            "source": ""
+          },
+          {
+            "handle": "jquery",
+            "source": ""
+          },
+          {
+            "handle": "cookie-law-info",
+            "source": "script.min.js"
+          },
+          {
+            "handle": "jquery-core",
+            "source": "jquery.min.js"
+          },
+          {
+            "handle": "jquery-migrate",
+            "source": "jquery-migrate.min.js"
+          },
+          {
+            "handle": "wc-jquery-blockui",
+            "source": "jquery.blockUI.min.js"
+          },
+          {
+            "handle": "wc-add-to-cart",
+            "source": "add-to-cart.min.js"
+          },
+          {
+            "handle": "wc-js-cookie",
+            "source": "js.cookie.min.js"
+          },
+          {
+            "handle": "google_gtagjs",
+            "source": "js"
+          },
+          {
+            "handle": "wp-polyfill",
+            "source": "wp-polyfill.min.js"
+          },
+          {
+            "handle": "wp-hooks",
+            "source": "hooks.min.js"
+          },
+          {
+            "handle": "wp-i18n",
+            "source": "i18n.min.js"
+          },
+          {
+            "handle": "wc-cart-checkout-base",
+            "source": "wc-cart-checkout-base-frontend.js"
+          },
+          {
+            "handle": "wc-cart-checkout-vendors",
+            "source": "wc-cart-checkout-vendors-frontend.js"
+          },
+          {
+            "handle": "react",
+            "source": "react.min.js"
+          },
+          {
+            "handle": "react-jsx-runtime",
+            "source": "react-jsx-runtime.min.js"
+          },
+          {
+            "handle": "react-dom",
+            "source": "react-dom.min.js"
+          },
+          {
+            "handle": "wc-types",
+            "source": "wc-types.js"
+          },
+          {
+            "handle": "wc-blocks-checkout-events",
+            "source": "blocks-checkout-events.js"
+          },
+          {
+            "handle": "wp-private-apis",
+            "source": "private-apis.min.js"
+          },
+          {
+            "handle": "wp-url",
+            "source": "url.min.js"
+          },
+          {
+            "handle": "wp-api-fetch",
+            "source": "api-fetch.min.js"
+          },
+          {
+            "handle": "wc-settings",
+            "source": "wc-settings.js"
+          },
+          {
+            "handle": "wp-deprecated",
+            "source": "deprecated.min.js"
+          },
+          {
+            "handle": "wp-dom",
+            "source": "dom.min.js"
+          },
+          {
+            "handle": "wp-escape-html",
+            "source": "escape-html.min.js"
+          },
+          {
+            "handle": "wp-element",
+            "source": "element.min.js"
+          },
+          {
+            "handle": "wp-is-shallow-equal",
+            "source": "is-shallow-equal.min.js"
+          },
+          {
+            "handle": "wp-keycodes",
+            "source": "keycodes.min.js"
+          },
+          {
+            "handle": "wp-priority-queue",
+            "source": "priority-queue.min.js"
+          },
+          {
+            "handle": "wp-undo-manager",
+            "source": "undo-manager.min.js"
+          },
+          {
+            "handle": "wp-compose",
+            "source": "compose.min.js"
+          },
+          {
+            "handle": "wp-redux-routine",
+            "source": "redux-routine.min.js"
+          },
+          {
+            "handle": "wp-data",
+            "source": "data.min.js"
+          },
+          {
+            "handle": "wc-blocks-registry",
+            "source": "wc-blocks-registry.js"
+          },
+          {
+            "handle": "wp-data-controls",
+            "source": "data-controls.min.js"
+          },
+          {
+            "handle": "wp-html-entities",
+            "source": "html-entities.min.js"
+          },
+          {
+            "handle": "wp-dom-ready",
+            "source": "dom-ready.min.js"
+          },
+          {
+            "handle": "wp-a11y",
+            "source": "a11y.min.js"
+          },
+          {
+            "handle": "moment",
+            "source": "moment.min.js"
+          },
+          {
+            "handle": "wp-date",
+            "source": "date.min.js"
+          },
+          {
+            "handle": "wp-primitives",
+            "source": "primitives.min.js"
+          },
+          {
+            "handle": "wp-rich-text",
+            "source": "rich-text.min.js"
+          },
+          {
+            "handle": "wp-theme",
+            "source": "theme.min.js"
+          },
+          {
+            "handle": "wp-warning",
+            "source": "warning.min.js"
+          },
+          {
+            "handle": "wp-components",
+            "source": "components.min.js"
+          },
+          {
+            "handle": "wp-notices",
+            "source": "notices.min.js"
+          },
+          {
+            "handle": "wc-blocks-middleware",
+            "source": "wc-blocks-middleware.js"
+          },
+          {
+            "handle": "wc-blocks-data-store",
+            "source": "wc-blocks-data.js"
+          },
+          {
+            "handle": "wc-sanitize",
+            "source": "index.js"
+          },
+          {
+            "handle": "wc-blocks-components",
+            "source": "blocks-components.js"
+          },
+          {
+            "handle": "wc-blocks-checkout",
+            "source": "blocks-checkout.js"
+          },
+          {
+            "handle": "wc-blocks-shared-context",
+            "source": "wc-blocks-shared-context.js"
+          },
+          {
+            "handle": "wc-blocks-shared-hocs",
+            "source": "wc-blocks-shared-hocs.js"
+          },
+          {
+            "handle": "wc-price-format",
+            "source": "price-format.js"
+          },
+          {
+            "handle": "wp-autop",
+            "source": "autop.min.js"
+          },
+          {
+            "handle": "wp-plugins",
+            "source": "plugins.min.js"
+          },
+          {
+            "handle": "wp-style-engine",
+            "source": "style-engine.min.js"
+          },
+          {
+            "handle": "wp-wordcount",
+            "source": "wordcount.min.js"
+          },
+          {
+            "handle": "woocommerce-services-store-notices",
+            "source": "woocommerce-services-store-notices-3.7.0.js"
+          },
+          {
+            "handle": "wc-payment-method-bacs",
+            "source": "wc-payment-method-bacs.js"
+          },
+          {
+            "handle": "wc-payment-method-cod",
+            "source": "wc-payment-method-cod.js"
+          },
+          {
+            "handle": "wc-stripe-blocks-vendors",
+            "source": "wc-stripe-blocks-vendors.js"
+          },
+          {
+            "handle": "wc-stripe-blocks-utils",
+            "source": "blocks-utils.js"
+          },
+          {
+            "handle": "wc-stripe-blocks-components",
+            "source": "blocks-components.js"
+          },
+          {
+            "handle": "wc-stripe-blocks-express-checkout",
+            "source": "blocks-express-checkout.js"
+          },
+          {
+            "handle": "wc-stripe-blocks-googlepay",
+            "source": "wc-stripe-googlepay.js"
+          },
+          {
+            "handle": "wc-stripe-blocks-apple-pay",
+            "source": "wc-stripe-apple-pay.js"
+          },
+          {
+            "handle": "wc-stripe-block-local-payment",
+            "source": "wc-stripe-local-payment.js"
+          },
+          {
+            "handle": "lodash",
+            "source": "lodash.min.js"
+          },
+          {
+            "handle": "stripe",
+            "source": "v3"
+          },
+          {
+            "handle": "WCPAY_BLOCKS_CHECKOUT",
+            "source": "blocks-checkout.js"
+          },
+          {
+            "handle": "wc-cart-block-frontend",
+            "source": "cart-frontend.js"
+          },
+          {
+            "handle": "awdr-main",
+            "source": "site_main.js"
+          },
+          {
+            "handle": "awdr-dynamic-price",
+            "source": "awdr-dynamic-price.js"
+          },
+          {
+            "handle": "ecomail",
+            "source": "plugin.js"
+          },
+          {
+            "handle": "WCPAY_CART",
+            "source": "cart.js"
+          },
+          {
+            "handle": "WCPAY_CART_BLOCK",
+            "source": "cart-block.js"
+          },
+          {
+            "handle": "sourcebuster-js",
+            "source": "sourcebuster.min.js"
+          },
+          {
+            "handle": "wc-order-attribution",
+            "source": "order-attribution.min.js"
+          },
+          {
+            "handle": "yay-currency-callback-general",
+            "source": "general.helper.min.js"
+          },
+          {
+            "handle": "yay-currency-callback-blocks",
+            "source": "blocks.helper.min.js"
+          },
+          {
+            "handle": "yay-currency-frontend-script",
+            "source": "script.min.js"
+          },
+          {
+            "handle": "yay-currency-third-party",
+            "source": "third-party.min.js"
+          },
+          {
+            "handle": "yay-currency-woo-blocks",
+            "source": "woocommerce-blocks.min.js"
+          },
+          {
+            "handle": "googlesitekit-events-provider-content-events",
+            "source": "googlesitekit-events-provider-content-events-c7172f3fd0e4d5ad62ef.js"
+          },
+          {
+            "handle": "woocommerce",
+            "source": "woocommerce.min.js"
+          },
+          {
+            "handle": "googlesitekit-events-provider-woocommerce",
+            "source": "googlesitekit-events-provider-woocommerce-86c5a3ff303665006998.js"
+          },
+          {
+            "handle": "googlesitekit-events-provider-wpforms",
+            "source": "googlesitekit-events-provider-wpforms-fdbd42f50702ca1e0c36.js"
+          },
+          {
+            "handle": "wcpay-frontend-tracks",
+            "source": "frontend-tracks.js"
+          }
+        ],
+        "styles": [
+          {
+            "handle": "wp-img-auto-sizes-contain",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-image",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-image-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-navigation-link",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-navigation-link-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-navigation-submenu",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-navigation-submenu-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-navigation",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-navigation-theme",
+            "source": ""
+          },
+          {
+            "handle": "woocommerce-mini-cart-style",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-group",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-group-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-template-part",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-template-part-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-heading",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-heading-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-separator",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-separator-theme",
+            "source": ""
+          },
+          {
+            "handle": "wc-blocks-style",
+            "source": "wc-blocks.css"
+          },
+          {
+            "handle": "wc-blocks-style-all-products",
+            "source": "all-products.css"
+          },
+          {
+            "handle": "wc-blocks-checkout-style",
+            "source": "blocks-checkout.css"
+          },
+          {
+            "handle": "wc-stripe-blocks-styles",
+            "source": "style.css"
+          },
+          {
+            "handle": "wc-blocks-style-cart",
+            "source": "cart.css"
+          },
+          {
+            "handle": "wc-blocks-packages-style",
+            "source": "packages-style.css"
+          },
+          {
+            "handle": "wp-block-paragraph",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-paragraph-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-social-link",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-social-link-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-social-links",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-social-links-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-list-item",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-list-item-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-list",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-list-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-shortcode",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-shortcode-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-column",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-column-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-button",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-button-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-buttons",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-buttons-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-columns",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-columns-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-library",
+            "source": ""
+          },
+          {
+            "handle": "woocommerce-blocktheme",
+            "source": "woocommerce-blocktheme.css"
+          },
+          {
+            "handle": "global-styles",
+            "source": ""
+          },
+          {
+            "handle": "core-block-supports",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-template-skip-link",
+            "source": ""
+          },
+          {
+            "handle": "woocommerce-layout",
+            "source": "woocommerce-layout.css"
+          },
+          {
+            "handle": "woocommerce-smallscreen",
+            "source": "woocommerce-smallscreen.css"
+          },
+          {
+            "handle": "woocommerce-general",
+            "source": "woocommerce.css"
+          },
+          {
+            "handle": "woocommerce-inline",
+            "source": ""
+          },
+          {
+            "handle": "WCPAY_CART_BLOCK",
+            "source": "cart-block.css"
+          },
+          {
+            "handle": "jadro-style",
+            "source": "style.css"
+          },
+          {
+            "handle": "jadro-woocommerce",
+            "source": "woocommerce.css"
+          },
+          {
+            "handle": "yay-currency-frontend-style",
+            "source": "styles.css"
+          },
+          {
+            "handle": "wpo_min-header-0",
+            "source": "wpo-minify-header-d0e9672c.min.css"
+          },
+          {
+            "handle": "wpo_min-header-1",
+            "source": "wpo-minify-header-eebb1416.min.css"
+          },
+          {
+            "handle": "wpo_min-header-2",
+            "source": "wpo-minify-header-6c3b3597.min.css"
+          }
+        ]
+      },
+      "cache": {
+        "wp_cache_constant": true,
+        "advanced_cache_dropin": true,
+        "object_cache_dropin": true,
+        "external_object_cache": false,
+        "object_cache_class": "WP_Object_Cache",
+        "htaccess_exists": true,
+        "htaccess_has_expires_rules": true,
+        "htaccess_has_cache_control_rules": true,
+        "wp_optimize_options": [
+          {
+            "name": "wp-optimize-auto",
+            "bytes": 215,
+            "keys": [
+              "revisions",
+              "trash",
+              "drafts",
+              "unapproved",
+              "optimize",
+              "usermeta",
+              "spams",
+              "transient"
+            ]
+          },
+          {
+            "name": "wp-optimize-autosmush",
+            "bytes": 0,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-back_up_delete_after",
+            "bytes": 0,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-back_up_delete_after_days",
+            "bytes": 2,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-back_up_original",
+            "bytes": 1,
+            "scalar": "1"
+          },
+          {
+            "name": "wp-optimize-browser_cache_error_message",
+            "bytes": 0,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-browser_cache_expire_days",
+            "bytes": 2,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-browser_cache_expire_hours",
+            "bytes": 1,
+            "scalar": "0"
+          },
+          {
+            "name": "wp-optimize-browser_cache_output",
+            "bytes": 0,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-completed_task_count",
+            "bytes": 3,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-compression_server",
+            "bytes": 9,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-corrupted-tables-count",
+            "bytes": 1,
+            "scalar": "0"
+          },
+          {
+            "name": "wp-optimize-dismiss_dash_notice_until",
+            "bytes": 10,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-dismiss_notice",
+            "bytes": 10,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-enable_browser_cache",
+            "bytes": 1,
+            "scalar": "1"
+          },
+          {
+            "name": "wp-optimize-enable-admin-menu",
+            "bytes": 5,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-image_quality",
+            "bytes": 2,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-install-or-update-notice-version",
+            "bytes": 3,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-installed-for",
+            "bytes": 10,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-is_gzip_compression_enabled",
+            "bytes": 4,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-last-optimized",
+            "bytes": 5,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-retention-enabled",
+            "bytes": 5,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-retention-period",
+            "bytes": 1,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-schedule",
+            "bytes": 5,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-schedule-type",
+            "bytes": 10,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-settings",
+            "bytes": 577,
+            "keys": [
+              "user-revisions",
+              "user-trash",
+              "user-orphandata",
+              "user-pingbacks",
+              "user-orphanedtables",
+              "user-attachments",
+              "user-trackbacks",
+              "user-commentmeta",
+              "user-postmeta",
+              "user-drafts",
+              "user-unapproved",
+              "user-optimize",
+              "user-usermeta",
+              "user-repairtables",
+              "user-spams",
+              "user-transient",
+              "last_saved_in"
+            ]
+          },
+          {
+            "name": "wp-optimize-show_smush_metabox",
+            "bytes": 4,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-total_bytes_saved",
+            "bytes": 8,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-total_percent_saved",
+            "bytes": 15,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-total-cleaned",
+            "bytes": 1,
+            "scalar": "0"
+          },
+          {
+            "name": "wp-optimize-total-cleaned-current-month",
+            "bytes": 1,
+            "scalar": "0"
+          },
+          {
+            "name": "wp-optimize-total-cleaned-previous-month",
+            "bytes": 1,
+            "scalar": "0"
+          },
+          {
+            "name": "wp-optimize-wpo_last_minify_preload",
+            "bytes": 10,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-wpo_last_minify_preload_type",
+            "bytes": 7,
+            "scalar": null
+          },
+          {
+            "name": "wpo_cache_config",
+            "bytes": 1609,
+            "keys": [
+              "enable_page_caching",
+              "page_cache_length_value",
+              "page_cache_length_unit",
+              "page_cache_length",
+              "cache_exception_conditional_tags",
+              "cache_specific_urls_only",
+              "cache_include_urls",
+              "cache_exception_urls",
+              "cache_ignore_query_variables",
+              "cache_exception_cookies",
+              "cache_exception_browser_agents",
+              "enable_sitemap_preload",
+              "enable_schedule_preload",
+              "preload_schedule_type",
+              "enable_mobile_caching",
+              "enable_user_caching",
+              "site_url",
+              "enable_cache_per_country",
+              "enable_cache_aelia_currency",
+              "permalink_structure",
+              "uploads",
+              "gmt_offset",
+              "timezone_string",
+              "date_format",
+              "time_format",
+              "use_webp_images",
+              "host_gravatars_locally",
+              "auto_preload_purged_contents",
+              "enable_rest_caching",
+              "last_cleared"
+            ],
+            "enable_page_caching": true
+          },
+          {
+            "name": "wpo_minify_config",
+            "bytes": 1979,
+            "keys": [
+              "debug",
+              "enabled_css_preload",
+              "enabled_js_preload",
+              "hpreconnect",
+              "hpreload",
+              "loadcss",
+              "remove_css",
+              "critical_path_css",
+              "critical_path_css_is_front_page",
+              "preserve_settings_on_uninstall",
+              "disable_when_logged_in",
+              "default_protocol",
+              "html_minification",
+              "clean_header_one",
+              "emoji_removal",
+              "merge_google_fonts",
+              "enable_display_swap",
+              "remove_googlefonts",
+              "host_local_google_fonts",
+              "disable_google_fonts_processing",
+              "gfonts_method",
+              "fawesome_method",
+              "enable_css",
+              "enable_css_minification",
+              "enable_merging_of_css",
+              "remove_print_mediatypes",
+              "inline_css",
+              "enable_js",
+              "enable_js_minification",
+              "enable_merging_of_js"
+            ],
+            "enabled": true
+          },
+          {
+            "name": "wpo_update_version",
+            "bytes": 5,
+            "scalar": null
+          },
+          {
+            "name": "wpo_version",
+            "bytes": 5,
+            "scalar": null
+          }
+        ]
+      },
+      "database": {
+        "autoloaded_options_bytes": 476283,
+        "recorded_query_seconds": 0.153,
+        "slow_callers": [
+          {
+            "caller": "require('wp-blog-header.php'), require_once('wp-load.php'), require_once('wp-config.php'), require_once('wp-settings.php'), do_action('init'), WP_Hook->do_action, WP_Hook->apply_fi",
+            "queries": 125,
+            "milliseconds": 10.1
+          },
+          {
+            "caller": "require('wp-blog-header.php'), require_once('wp-load.php'), require_once('wp-config.php'), require_once('wp-settings.php'), do_action('plugins_loaded'), WP_Hook->do_action, WP_Hook",
+            "queries": 2,
+            "milliseconds": 7.6
+          },
+          {
+            "caller": "require('wp-blog-header.php'), require_once('wp-includes/template-loader.php'), include('wp-includes/template-canvas.php'), get_the_block_template_html, do_blocks, render_block, WP",
+            "queries": 1,
+            "milliseconds": 6.9
+          },
+          {
+            "caller": "require('wp-blog-header.php'), require_once('wp-load.php'), require_once('wp-config.php'), require_once('wp-settings.php'), do_action('init'), WP_Hook->do_action, WP_Hook->apply_fi",
+            "queries": 1,
+            "milliseconds": 6.3
+          },
+          {
+            "caller": "require('wp-blog-header.php'), require_once('wp-includes/template-loader.php'), include('wp-includes/template-canvas.php'), wp_head, do_action('wp_head'), WP_Hook->do_action, WP_Ho",
+            "queries": 1,
+            "milliseconds": 5.3
+          },
+          {
+            "caller": "require('wp-blog-header.php'), require_once('wp-includes/template-loader.php'), include('wp-includes/template-canvas.php'), get_the_block_template_html, do_blocks, render_block, WP",
+            "queries": 1,
+            "milliseconds": 4.9
+          },
+          {
+            "caller": "require('wp-blog-header.php'), require_once('wp-load.php'), require_once('wp-config.php'), require_once('wp-settings.php'), do_action('init'), WP_Hook->do_action, WP_Hook->apply_fi",
+            "queries": 5,
+            "milliseconds": 3.9
+          },
+          {
+            "caller": "require('wp-blog-header.php'), require_once('wp-includes/template-loader.php'), include('wp-includes/template-canvas.php'), wp_head, do_action('wp_head'), WP_Hook->do_action, WP_Ho",
+            "queries": 3,
+            "milliseconds": 3.8
+          },
+          {
+            "caller": "require('wp-blog-header.php'), require_once('wp-includes/template-loader.php'), include('wp-includes/template-canvas.php'), get_the_block_template_html, do_blocks, render_block, WP",
+            "queries": 2,
+            "milliseconds": 3.3
+          },
+          {
+            "caller": "require('wp-blog-header.php'), require_once('wp-includes/template-loader.php'), include('wp-includes/template-canvas.php'), get_the_block_template_html, do_blocks, render_block, WP",
+            "queries": 9,
+            "milliseconds": 3
+          },
+          {
+            "caller": "shutdown_action_hook, do_action('shutdown'), WP_Hook->do_action, WP_Hook->apply_filters, {closure}",
+            "queries": 2,
+            "milliseconds": 2.8
+          },
+          {
+            "caller": "require('wp-blog-header.php'), require_once('wp-includes/template-loader.php'), get_page_template, get_query_template, locate_block_template, resolve_block_template, get_block_temp",
+            "queries": 1,
+            "milliseconds": 2.4
+          }
+        ]
+      },
+      "runtime": {
+        "slow_plugin_load_intervals": [
+          {
+            "plugin": "wpforms-lite/wpforms.php",
+            "milliseconds": 283.6
+          },
+          {
+            "plugin": "woocommerce/woocommerce.php",
+            "milliseconds": 142.2
+          },
+          {
+            "plugin": "woocommerce-payments/woocommerce-payments.php",
+            "milliseconds": 61.2
+          },
+          {
+            "plugin": "packeta/packeta.php",
+            "milliseconds": 55.8
+          },
+          {
+            "plugin": "open-user-map/open-user-map.php",
+            "milliseconds": 45
+          },
+          {
+            "plugin": "cookie-law-info/cookie-law-info.php",
+            "milliseconds": 20.3
+          },
+          {
+            "plugin": "woocommerce-pay-for-payment/woocommerce-payforpayment.php",
+            "milliseconds": 20.2
+          },
+          {
+            "plugin": "woo-stripe-payment/stripe-payments.php",
+            "milliseconds": 18.4
+          },
+          {
+            "plugin": "wordpress-seo/wp-seo.php",
+            "milliseconds": 17.9
+          },
+          {
+            "plugin": "google-site-kit/google-site-kit.php",
+            "milliseconds": 15
+          },
+          {
+            "plugin": "wp-optimize/wp-optimize.php",
+            "milliseconds": 8.1
+          },
+          {
+            "plugin": "WC-Doprava-main/wcdoprava.php",
+            "milliseconds": 6.7
+          }
+        ],
+        "http_calls": [],
+        "slow_hook_intervals": [
+          {
+            "after_hook": "woocommerce_log_directory",
+            "milliseconds": 41
+          },
+          {
+            "after_hook": "default_option_packetery_advanced",
+            "milliseconds": 39.7
+          },
+          {
+            "after_hook": "transient_jetpack_autoloader_plugin_paths",
+            "milliseconds": 39.3
+          },
+          {
+            "after_hook": "stylesheet",
+            "milliseconds": 30.2
+          },
+          {
+            "after_hook": "wc_payments_api_client",
+            "milliseconds": 30
+          },
+          {
+            "after_hook": "option_fs_debug_mode",
+            "milliseconds": 29.7
+          },
+          {
+            "after_hook": "log_query_custom_data",
+            "milliseconds": 25.5
+          },
+          {
+            "after_hook": "default_option_woocommerce_force_ssl_checkout",
+            "milliseconds": 24.3
+          },
+          {
+            "after_hook": "wp_doing_ajax",
+            "milliseconds": 23.2
+          },
+          {
+            "after_hook": "woocommerce_currency_symbols",
+            "milliseconds": 22.4
+          }
+        ]
+      }
+    },
+    "cart_with_item_en": {
+      "schema": 1,
+      "uri": "/en/cart/?jamu_bridge=performance-audit",
+      "context": {
+        "home": false,
+        "product": false,
+        "cart": true,
+        "checkout": false
+      },
+      "metrics": {
+        "wordpress_seconds": 4.907,
+        "database_queries": 500,
+        "memory_peak_bytes": 207618048,
+        "scripts_enqueued": 90,
+        "styles_enqueued": 60,
+        "set_cookie_headers": 0,
+        "scripts": [
+          {
+            "handle": "WCPAY_ASSETS",
+            "source": ""
+          },
+          {
+            "handle": "jquery",
+            "source": ""
+          },
+          {
+            "handle": "cookie-law-info",
+            "source": "script.min.js"
+          },
+          {
+            "handle": "jquery-core",
+            "source": "jquery.min.js"
+          },
+          {
+            "handle": "jquery-migrate",
+            "source": "jquery-migrate.min.js"
+          },
+          {
+            "handle": "wc-jquery-blockui",
+            "source": "jquery.blockUI.min.js"
+          },
+          {
+            "handle": "wc-add-to-cart",
+            "source": "add-to-cart.min.js"
+          },
+          {
+            "handle": "wc-js-cookie",
+            "source": "js.cookie.min.js"
+          },
+          {
+            "handle": "google_gtagjs",
+            "source": "js"
+          },
+          {
+            "handle": "wp-polyfill",
+            "source": "wp-polyfill.min.js"
+          },
+          {
+            "handle": "wp-hooks",
+            "source": "hooks.min.js"
+          },
+          {
+            "handle": "wp-i18n",
+            "source": "i18n.min.js"
+          },
+          {
+            "handle": "wc-cart-checkout-base",
+            "source": "wc-cart-checkout-base-frontend.js"
+          },
+          {
+            "handle": "wc-cart-checkout-vendors",
+            "source": "wc-cart-checkout-vendors-frontend.js"
+          },
+          {
+            "handle": "react",
+            "source": "react.min.js"
+          },
+          {
+            "handle": "react-jsx-runtime",
+            "source": "react-jsx-runtime.min.js"
+          },
+          {
+            "handle": "react-dom",
+            "source": "react-dom.min.js"
+          },
+          {
+            "handle": "wc-types",
+            "source": "wc-types.js"
+          },
+          {
+            "handle": "wc-blocks-checkout-events",
+            "source": "blocks-checkout-events.js"
+          },
+          {
+            "handle": "wp-private-apis",
+            "source": "private-apis.min.js"
+          },
+          {
+            "handle": "wp-url",
+            "source": "url.min.js"
+          },
+          {
+            "handle": "wp-api-fetch",
+            "source": "api-fetch.min.js"
+          },
+          {
+            "handle": "wc-settings",
+            "source": "wc-settings.js"
+          },
+          {
+            "handle": "wp-deprecated",
+            "source": "deprecated.min.js"
+          },
+          {
+            "handle": "wp-dom",
+            "source": "dom.min.js"
+          },
+          {
+            "handle": "wp-escape-html",
+            "source": "escape-html.min.js"
+          },
+          {
+            "handle": "wp-element",
+            "source": "element.min.js"
+          },
+          {
+            "handle": "wp-is-shallow-equal",
+            "source": "is-shallow-equal.min.js"
+          },
+          {
+            "handle": "wp-keycodes",
+            "source": "keycodes.min.js"
+          },
+          {
+            "handle": "wp-priority-queue",
+            "source": "priority-queue.min.js"
+          },
+          {
+            "handle": "wp-undo-manager",
+            "source": "undo-manager.min.js"
+          },
+          {
+            "handle": "wp-compose",
+            "source": "compose.min.js"
+          },
+          {
+            "handle": "wp-redux-routine",
+            "source": "redux-routine.min.js"
+          },
+          {
+            "handle": "wp-data",
+            "source": "data.min.js"
+          },
+          {
+            "handle": "wc-blocks-registry",
+            "source": "wc-blocks-registry.js"
+          },
+          {
+            "handle": "wp-data-controls",
+            "source": "data-controls.min.js"
+          },
+          {
+            "handle": "wp-html-entities",
+            "source": "html-entities.min.js"
+          },
+          {
+            "handle": "wp-dom-ready",
+            "source": "dom-ready.min.js"
+          },
+          {
+            "handle": "wp-a11y",
+            "source": "a11y.min.js"
+          },
+          {
+            "handle": "moment",
+            "source": "moment.min.js"
+          },
+          {
+            "handle": "wp-date",
+            "source": "date.min.js"
+          },
+          {
+            "handle": "wp-primitives",
+            "source": "primitives.min.js"
+          },
+          {
+            "handle": "wp-rich-text",
+            "source": "rich-text.min.js"
+          },
+          {
+            "handle": "wp-theme",
+            "source": "theme.min.js"
+          },
+          {
+            "handle": "wp-warning",
+            "source": "warning.min.js"
+          },
+          {
+            "handle": "wp-components",
+            "source": "components.min.js"
+          },
+          {
+            "handle": "wp-notices",
+            "source": "notices.min.js"
+          },
+          {
+            "handle": "wc-blocks-middleware",
+            "source": "wc-blocks-middleware.js"
+          },
+          {
+            "handle": "wc-blocks-data-store",
+            "source": "wc-blocks-data.js"
+          },
+          {
+            "handle": "wc-sanitize",
+            "source": "index.js"
+          },
+          {
+            "handle": "wc-blocks-components",
+            "source": "blocks-components.js"
+          },
+          {
+            "handle": "wc-blocks-checkout",
+            "source": "blocks-checkout.js"
+          },
+          {
+            "handle": "wc-blocks-shared-context",
+            "source": "wc-blocks-shared-context.js"
+          },
+          {
+            "handle": "wc-blocks-shared-hocs",
+            "source": "wc-blocks-shared-hocs.js"
+          },
+          {
+            "handle": "wc-price-format",
+            "source": "price-format.js"
+          },
+          {
+            "handle": "wp-autop",
+            "source": "autop.min.js"
+          },
+          {
+            "handle": "wp-plugins",
+            "source": "plugins.min.js"
+          },
+          {
+            "handle": "wp-style-engine",
+            "source": "style-engine.min.js"
+          },
+          {
+            "handle": "wp-wordcount",
+            "source": "wordcount.min.js"
+          },
+          {
+            "handle": "woocommerce-services-store-notices",
+            "source": "woocommerce-services-store-notices-3.7.0.js"
+          },
+          {
+            "handle": "wc-payment-method-bacs",
+            "source": "wc-payment-method-bacs.js"
+          },
+          {
+            "handle": "wc-payment-method-cod",
+            "source": "wc-payment-method-cod.js"
+          },
+          {
+            "handle": "wc-stripe-blocks-vendors",
+            "source": "wc-stripe-blocks-vendors.js"
+          },
+          {
+            "handle": "wc-stripe-blocks-utils",
+            "source": "blocks-utils.js"
+          },
+          {
+            "handle": "wc-stripe-blocks-components",
+            "source": "blocks-components.js"
+          },
+          {
+            "handle": "wc-stripe-blocks-express-checkout",
+            "source": "blocks-express-checkout.js"
+          },
+          {
+            "handle": "wc-stripe-blocks-googlepay",
+            "source": "wc-stripe-googlepay.js"
+          },
+          {
+            "handle": "wc-stripe-blocks-apple-pay",
+            "source": "wc-stripe-apple-pay.js"
+          },
+          {
+            "handle": "wc-stripe-block-local-payment",
+            "source": "wc-stripe-local-payment.js"
+          },
+          {
+            "handle": "lodash",
+            "source": "lodash.min.js"
+          },
+          {
+            "handle": "stripe",
+            "source": "v3"
+          },
+          {
+            "handle": "WCPAY_BLOCKS_CHECKOUT",
+            "source": "blocks-checkout.js"
+          },
+          {
+            "handle": "wc-cart-block-frontend",
+            "source": "cart-frontend.js"
+          },
+          {
+            "handle": "awdr-main",
+            "source": "site_main.js"
+          },
+          {
+            "handle": "awdr-dynamic-price",
+            "source": "awdr-dynamic-price.js"
+          },
+          {
+            "handle": "ecomail",
+            "source": "plugin.js"
+          },
+          {
+            "handle": "WCPAY_CART",
+            "source": "cart.js"
+          },
+          {
+            "handle": "WCPAY_CART_BLOCK",
+            "source": "cart-block.js"
+          },
+          {
+            "handle": "sourcebuster-js",
+            "source": "sourcebuster.min.js"
+          },
+          {
+            "handle": "wc-order-attribution",
+            "source": "order-attribution.min.js"
+          },
+          {
+            "handle": "yay-currency-callback-general",
+            "source": "general.helper.min.js"
+          },
+          {
+            "handle": "yay-currency-callback-blocks",
+            "source": "blocks.helper.min.js"
+          },
+          {
+            "handle": "yay-currency-frontend-script",
+            "source": "script.min.js"
+          },
+          {
+            "handle": "yay-currency-third-party",
+            "source": "third-party.min.js"
+          },
+          {
+            "handle": "yay-currency-woo-blocks",
+            "source": "woocommerce-blocks.min.js"
+          },
+          {
+            "handle": "googlesitekit-events-provider-content-events",
+            "source": "googlesitekit-events-provider-content-events-c7172f3fd0e4d5ad62ef.js"
+          },
+          {
+            "handle": "woocommerce",
+            "source": "woocommerce.min.js"
+          },
+          {
+            "handle": "googlesitekit-events-provider-woocommerce",
+            "source": "googlesitekit-events-provider-woocommerce-86c5a3ff303665006998.js"
+          },
+          {
+            "handle": "googlesitekit-events-provider-wpforms",
+            "source": "googlesitekit-events-provider-wpforms-fdbd42f50702ca1e0c36.js"
+          },
+          {
+            "handle": "wcpay-frontend-tracks",
+            "source": "frontend-tracks.js"
+          }
+        ],
+        "styles": [
+          {
+            "handle": "wp-img-auto-sizes-contain",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-image",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-image-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-navigation-link",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-navigation-link-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-navigation-submenu",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-navigation-submenu-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-navigation",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-navigation-theme",
+            "source": ""
+          },
+          {
+            "handle": "woocommerce-mini-cart-style",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-group",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-group-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-template-part",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-template-part-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-heading",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-heading-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-separator",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-separator-theme",
+            "source": ""
+          },
+          {
+            "handle": "wc-blocks-style",
+            "source": "wc-blocks.css"
+          },
+          {
+            "handle": "wc-blocks-style-all-products",
+            "source": "all-products.css"
+          },
+          {
+            "handle": "wc-blocks-checkout-style",
+            "source": "blocks-checkout.css"
+          },
+          {
+            "handle": "wc-stripe-blocks-styles",
+            "source": "style.css"
+          },
+          {
+            "handle": "wc-blocks-style-cart",
+            "source": "cart.css"
+          },
+          {
+            "handle": "wc-blocks-packages-style",
+            "source": "packages-style.css"
+          },
+          {
+            "handle": "wp-block-paragraph",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-paragraph-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-social-link",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-social-link-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-social-links",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-social-links-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-list-item",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-list-item-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-list",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-list-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-shortcode",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-shortcode-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-column",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-column-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-button",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-button-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-buttons",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-buttons-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-columns",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-columns-theme",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-library",
+            "source": ""
+          },
+          {
+            "handle": "woocommerce-blocktheme",
+            "source": "woocommerce-blocktheme.css"
+          },
+          {
+            "handle": "global-styles",
+            "source": ""
+          },
+          {
+            "handle": "core-block-supports",
+            "source": ""
+          },
+          {
+            "handle": "wp-block-template-skip-link",
+            "source": ""
+          },
+          {
+            "handle": "woocommerce-layout",
+            "source": "woocommerce-layout.css"
+          },
+          {
+            "handle": "woocommerce-smallscreen",
+            "source": "woocommerce-smallscreen.css"
+          },
+          {
+            "handle": "woocommerce-general",
+            "source": "woocommerce.css"
+          },
+          {
+            "handle": "woocommerce-inline",
+            "source": ""
+          },
+          {
+            "handle": "WCPAY_CART_BLOCK",
+            "source": "cart-block.css"
+          },
+          {
+            "handle": "jadro-style",
+            "source": "style.css"
+          },
+          {
+            "handle": "jadro-woocommerce",
+            "source": "woocommerce.css"
+          },
+          {
+            "handle": "yay-currency-frontend-style",
+            "source": "styles.css"
+          },
+          {
+            "handle": "wpo_min-header-0",
+            "source": "wpo-minify-header-d0e9672c.min.css"
+          },
+          {
+            "handle": "wpo_min-header-1",
+            "source": "wpo-minify-header-eebb1416.min.css"
+          },
+          {
+            "handle": "wpo_min-header-2",
+            "source": "wpo-minify-header-6c3b3597.min.css"
+          }
+        ]
+      },
+      "cache": {
+        "wp_cache_constant": true,
+        "advanced_cache_dropin": true,
+        "object_cache_dropin": true,
+        "external_object_cache": false,
+        "object_cache_class": "WP_Object_Cache",
+        "htaccess_exists": true,
+        "htaccess_has_expires_rules": true,
+        "htaccess_has_cache_control_rules": true,
+        "wp_optimize_options": [
+          {
+            "name": "wp-optimize-auto",
+            "bytes": 215,
+            "keys": [
+              "revisions",
+              "trash",
+              "drafts",
+              "unapproved",
+              "optimize",
+              "usermeta",
+              "spams",
+              "transient"
+            ]
+          },
+          {
+            "name": "wp-optimize-autosmush",
+            "bytes": 0,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-back_up_delete_after",
+            "bytes": 0,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-back_up_delete_after_days",
+            "bytes": 2,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-back_up_original",
+            "bytes": 1,
+            "scalar": "1"
+          },
+          {
+            "name": "wp-optimize-browser_cache_error_message",
+            "bytes": 0,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-browser_cache_expire_days",
+            "bytes": 2,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-browser_cache_expire_hours",
+            "bytes": 1,
+            "scalar": "0"
+          },
+          {
+            "name": "wp-optimize-browser_cache_output",
+            "bytes": 0,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-completed_task_count",
+            "bytes": 3,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-compression_server",
+            "bytes": 9,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-corrupted-tables-count",
+            "bytes": 1,
+            "scalar": "0"
+          },
+          {
+            "name": "wp-optimize-dismiss_dash_notice_until",
+            "bytes": 10,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-dismiss_notice",
+            "bytes": 10,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-enable_browser_cache",
+            "bytes": 1,
+            "scalar": "1"
+          },
+          {
+            "name": "wp-optimize-enable-admin-menu",
+            "bytes": 5,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-image_quality",
+            "bytes": 2,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-install-or-update-notice-version",
+            "bytes": 3,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-installed-for",
+            "bytes": 10,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-is_gzip_compression_enabled",
+            "bytes": 4,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-last-optimized",
+            "bytes": 5,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-retention-enabled",
+            "bytes": 5,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-retention-period",
+            "bytes": 1,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-schedule",
+            "bytes": 5,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-schedule-type",
+            "bytes": 10,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-settings",
+            "bytes": 577,
+            "keys": [
+              "user-revisions",
+              "user-trash",
+              "user-orphandata",
+              "user-pingbacks",
+              "user-orphanedtables",
+              "user-attachments",
+              "user-trackbacks",
+              "user-commentmeta",
+              "user-postmeta",
+              "user-drafts",
+              "user-unapproved",
+              "user-optimize",
+              "user-usermeta",
+              "user-repairtables",
+              "user-spams",
+              "user-transient",
+              "last_saved_in"
+            ]
+          },
+          {
+            "name": "wp-optimize-show_smush_metabox",
+            "bytes": 4,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-total_bytes_saved",
+            "bytes": 8,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-total_percent_saved",
+            "bytes": 15,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-total-cleaned",
+            "bytes": 1,
+            "scalar": "0"
+          },
+          {
+            "name": "wp-optimize-total-cleaned-current-month",
+            "bytes": 1,
+            "scalar": "0"
+          },
+          {
+            "name": "wp-optimize-total-cleaned-previous-month",
+            "bytes": 1,
+            "scalar": "0"
+          },
+          {
+            "name": "wp-optimize-wpo_last_minify_preload",
+            "bytes": 10,
+            "scalar": null
+          },
+          {
+            "name": "wp-optimize-wpo_last_minify_preload_type",
+            "bytes": 7,
+            "scalar": null
+          },
+          {
+            "name": "wpo_cache_config",
+            "bytes": 1609,
+            "keys": [
+              "enable_page_caching",
+              "page_cache_length_value",
+              "page_cache_length_unit",
+              "page_cache_length",
+              "cache_exception_conditional_tags",
+              "cache_specific_urls_only",
+              "cache_include_urls",
+              "cache_exception_urls",
+              "cache_ignore_query_variables",
+              "cache_exception_cookies",
+              "cache_exception_browser_agents",
+              "enable_sitemap_preload",
+              "enable_schedule_preload",
+              "preload_schedule_type",
+              "enable_mobile_caching",
+              "enable_user_caching",
+              "site_url",
+              "enable_cache_per_country",
+              "enable_cache_aelia_currency",
+              "permalink_structure",
+              "uploads",
+              "gmt_offset",
+              "timezone_string",
+              "date_format",
+              "time_format",
+              "use_webp_images",
+              "host_gravatars_locally",
+              "auto_preload_purged_contents",
+              "enable_rest_caching",
+              "last_cleared"
+            ],
+            "enable_page_caching": true
+          },
+          {
+            "name": "wpo_minify_config",
+            "bytes": 1979,
+            "keys": [
+              "debug",
+              "enabled_css_preload",
+              "enabled_js_preload",
+              "hpreconnect",
+              "hpreload",
+              "loadcss",
+              "remove_css",
+              "critical_path_css",
+              "critical_path_css_is_front_page",
+              "preserve_settings_on_uninstall",
+              "disable_when_logged_in",
+              "default_protocol",
+              "html_minification",
+              "clean_header_one",
+              "emoji_removal",
+              "merge_google_fonts",
+              "enable_display_swap",
+              "remove_googlefonts",
+              "host_local_google_fonts",
+              "disable_google_fonts_processing",
+              "gfonts_method",
+              "fawesome_method",
+              "enable_css",
+              "enable_css_minification",
+              "enable_merging_of_css",
+              "remove_print_mediatypes",
+              "inline_css",
+              "enable_js",
+              "enable_js_minification",
+              "enable_merging_of_js"
+            ],
+            "enabled": true
+          },
+          {
+            "name": "wpo_update_version",
+            "bytes": 5,
+            "scalar": null
+          },
+          {
+            "name": "wpo_version",
+            "bytes": 5,
+            "scalar": null
+          }
+        ]
+      },
+      "database": {
+        "autoloaded_options_bytes": 476283,
+        "recorded_query_seconds": 0.106,
+        "slow_callers": [
+          {
+            "caller": "require('wp-blog-header.php'), require_once('wp-load.php'), require_once('wp-config.php'), require_once('wp-settings.php'), do_action('init'), WP_Hook->do_action, WP_Hook->apply_fi",
+            "queries": 125,
+            "milliseconds": 12.9
+          },
+          {
+            "caller": "require('wp-blog-header.php'), require_once('wp-load.php'), require_once('wp-config.php'), require_once('wp-settings.php'), do_action('init'), WP_Hook->do_action, WP_Hook->apply_fi",
+            "queries": 5,
+            "milliseconds": 3.7
+          },
+          {
+            "caller": "require('wp-blog-header.php'), require_once('wp-load.php'), require_once('wp-config.php'), require_once('wp-settings.php'), do_action('plugins_loaded'), WP_Hook->do_action, WP_Hook",
+            "queries": 2,
+            "milliseconds": 2.8
+          },
+          {
+            "caller": "shutdown_action_hook, do_action('shutdown'), WP_Hook->do_action, WP_Hook->apply_filters, {closure}",
+            "queries": 2,
+            "milliseconds": 2.7
+          },
+          {
+            "caller": "require('wp-blog-header.php'), require_once('wp-load.php'), require_once('wp-config.php'), require_once('wp-settings.php'), do_action('init'), WP_Hook->do_action, WP_Hook->apply_fi",
+            "queries": 11,
+            "milliseconds": 1.7
+          },
+          {
+            "caller": "require('wp-blog-header.php'), require_once('wp-includes/template-loader.php'), include('wp-includes/template-canvas.php'), get_the_block_template_html, do_blocks, render_block, WP",
+            "queries": 2,
+            "milliseconds": 1.7
+          },
+          {
+            "caller": "require('wp-blog-header.php'), require_once('wp-includes/template-loader.php'), include('wp-includes/template-canvas.php'), get_the_block_template_html, do_blocks, render_block, WP",
+            "queries": 4,
+            "milliseconds": 1.5
+          },
+          {
+            "caller": "require('wp-blog-header.php'), require_once('wp-includes/template-loader.php'), include('wp-includes/template-canvas.php'), get_the_block_template_html, do_blocks, render_block, WP",
+            "queries": 8,
+            "milliseconds": 1.5
+          },
+          {
+            "caller": "require('wp-blog-header.php'), require_once('wp-includes/template-loader.php'), include('wp-includes/template-canvas.php'), get_the_block_template_html, do_blocks, render_block, WP",
+            "queries": 3,
+            "milliseconds": 1.5
+          },
+          {
+            "caller": "require('wp-blog-header.php'), require_once('wp-includes/template-loader.php'), include('wp-includes/template-canvas.php'), get_the_block_template_html, do_blocks, render_block, WP",
+            "queries": 6,
+            "milliseconds": 1.4
+          },
+          {
+            "caller": "require('wp-blog-header.php'), require_once('wp-includes/template-loader.php'), include('wp-includes/template-canvas.php'), get_the_block_template_html, do_blocks, render_block, WP",
+            "queries": 9,
+            "milliseconds": 1.4
+          },
+          {
+            "caller": "require('wp-blog-header.php'), require_once('wp-includes/template-loader.php'), include('wp-includes/template-canvas.php'), get_the_block_template_html, do_blocks, render_block, WP",
+            "queries": 4,
+            "milliseconds": 1.4
+          }
+        ]
+      },
+      "runtime": {
+        "slow_plugin_load_intervals": [
+          {
+            "plugin": "wpforms-lite/wpforms.php",
+            "milliseconds": 259.1
           },
           {
             "plugin": "woocommerce/woocommerce.php",
@@ -419,101 +4849,94 @@
           },
           {
             "plugin": "woocommerce-payments/woocommerce-payments.php",
-            "milliseconds": 63.7
+            "milliseconds": 61.2
           },
           {
             "plugin": "packeta/packeta.php",
-            "milliseconds": 54.8
+            "milliseconds": 56.6
           },
           {
             "plugin": "open-user-map/open-user-map.php",
-            "milliseconds": 43.4
+            "milliseconds": 44.7
+          },
+          {
+            "plugin": "cookie-law-info/cookie-law-info.php",
+            "milliseconds": 19.5
+          },
+          {
+            "plugin": "wordpress-seo/wp-seo.php",
+            "milliseconds": 19.2
           },
           {
             "plugin": "woocommerce-pay-for-payment/woocommerce-payforpayment.php",
             "milliseconds": 19
           },
           {
-            "plugin": "wordpress-seo/wp-seo.php",
-            "milliseconds": 19
-          },
-          {
-            "plugin": "cookie-law-info/cookie-law-info.php",
-            "milliseconds": 18.9
-          },
-          {
             "plugin": "woo-stripe-payment/stripe-payments.php",
-            "milliseconds": 17.8
+            "milliseconds": 18
           },
           {
             "plugin": "google-site-kit/google-site-kit.php",
-            "milliseconds": 14.1
+            "milliseconds": 16.9
+          },
+          {
+            "plugin": "insert-headers-and-footers/ihaf.php",
+            "milliseconds": 9
           },
           {
             "plugin": "wp-optimize/wp-optimize.php",
-            "milliseconds": 8.8
-          },
-          {
-            "plugin": "WC-Doprava-main/wcdoprava.php",
-            "milliseconds": 6.2
+            "milliseconds": 8.3
           }
         ],
         "http_calls": [],
         "slow_hook_intervals": [
-          {
-            "after_hook": "transient_jetpack_autoloader_plugin_paths",
-            "milliseconds": 42
-          },
           {
             "after_hook": "woocommerce_log_directory",
             "milliseconds": 41.6
           },
           {
             "after_hook": "default_option_packetery_advanced",
-            "milliseconds": 39.1
+            "milliseconds": 40.7
+          },
+          {
+            "after_hook": "transient_jetpack_autoloader_plugin_paths",
+            "milliseconds": 40.2
           },
           {
             "after_hook": "wc_payments_api_client",
-            "milliseconds": 30.1
+            "milliseconds": 30.5
           },
           {
             "after_hook": "option_fs_debug_mode",
-            "milliseconds": 29.8
+            "milliseconds": 29.9
           },
           {
             "after_hook": "wp_theme_json_data_default",
-            "milliseconds": 25.9
+            "milliseconds": 26.3
           },
           {
             "after_hook": "default_option_woocommerce_force_ssl_checkout",
-            "milliseconds": 24.8
-          },
-          {
-            "after_hook": "log_query_custom_data",
-            "milliseconds": 24.7
-          },
-          {
-            "after_hook": "woocommerce_currency_symbols",
-            "milliseconds": 23.8
+            "milliseconds": 24.6
           },
           {
             "after_hook": "stylesheet",
-            "milliseconds": 23.1
+            "milliseconds": 23.8
+          },
+          {
+            "after_hook": "log_query_custom_data",
+            "milliseconds": 23.5
+          },
+          {
+            "after_hook": "woocommerce_currency_symbols",
+            "milliseconds": 22.1
           },
           {
             "after_hook": "wp_doing_ajax",
-            "milliseconds": 22.9
+            "milliseconds": 21.4
           }
         ]
-      }
-    },
-    "cart_with_item_en": {
-      "audit_error": "JSONDecodeError",
-      "add_to_cart_status": 200,
-      "http_status": 200,
-      "body_bytes": 8905,
-      "body_prefix": "{\"schema\":1,\"uri\":\"/en/cart/?jamu_bridge=performance-audit\",\"context\":{\"home\":false,\"product\":false,\"cart\":true,\"checkout\":false},\"metrics\":{\"wordpress_seconds\":4.457,\"database_queries\":500,\"memory_peak_bytes\":207618048,\"scripts_enqueued\":9",
-      "body_suffix": "r_hook\":\"default_option_woocommerce_force_ssl_checkout\",\"milliseconds\":22.6},{\"after_hook\":\"log_query_custom_data\",\"milliseconds\":21.5}]}} <!-- WP Optimize page cache - https://teamupdraft.com/wp-optimize/ - Page not served from cache  --> "
+      },
+      "add_to_cart_status": 200
     }
   }
 }
