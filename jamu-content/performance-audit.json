@@ -13,7 +13,7 @@
       "audit_error": "JSONDecodeError",
       "http_status": 200,
       "content_type": "text/html; charset=UTF-8",
-      "body_bytes": 387140,
+      "body_bytes": 390629,
       "starts_with_html": true,
       "contains_php_error": false
     },
@@ -21,7 +21,7 @@
       "audit_error": "JSONDecodeError",
       "http_status": 200,
       "content_type": "text/html; charset=UTF-8",
-      "body_bytes": 537346,
+      "body_bytes": 537367,
       "starts_with_html": true,
       "contains_php_error": false
     },
@@ -29,7 +29,7 @@
       "audit_error": "JSONDecodeError",
       "http_status": 200,
       "content_type": "text/html; charset=UTF-8",
-      "body_bytes": 537334,
+      "body_bytes": 537356,
       "starts_with_html": true,
       "contains_php_error": false
     }
